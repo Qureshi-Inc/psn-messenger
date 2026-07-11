@@ -1,0 +1,9 @@
+{
+  "name": "psn-slapper-plugin",
+  "version": "1.0.0",
+  "private": true,
+  "dependencies": {
+    "pureimage": "^0.4.13",
+    "ws": "^8.18.0"
+  }
+}

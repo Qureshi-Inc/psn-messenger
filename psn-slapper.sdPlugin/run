@@ -1,0 +1,13 @@
+#!/bin/bash
+DIR="$(cd "$(dirname "$0")" && pwd)"
+
+if [ -x "/Applications/Redragon Stream Station.app/Contents/Helpers/node20" ]; then
+  NODE="/Applications/Redragon Stream Station.app/Contents/Helpers/node20"
+elif command -v node &>/dev/null; then
+  NODE="$(command -v node)"
+else
+  echo "ERROR: node not found" >&2
+  exit 1
+fi
+
+exec "$NODE" "$DIR/plugin/index.js" "$@"

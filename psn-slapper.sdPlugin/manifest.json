@@ -1,0 +1,29 @@
+{
+  "SDKVersion": 2,
+  "Author": "opti3",
+  "Name": "PSN Slapper",
+  "Description": "Send messages to your PSN group chat with one tap.",
+  "Icon": "imgs/plugin",
+  "Version": "1.0.0",
+  "CodePathMac": "run",
+  "Category": "PSN",
+  "CategoryIcon": "imgs/category",
+  "Software": {
+    "MinimumVersion": "2.9"
+  },
+  "OS": [
+    { "Platform": "mac", "MinimumVersion": "10.15" },
+    { "Platform": "windows", "MinimumVersion": "10" }
+  ],
+  "Actions": [
+    {
+      "UUID": "com.psn.slapper.haveyouever",
+      "Name": "Have You Ever?",
+      "Tooltip": "Send 'Have you ever?' to PSN group",
+      "Icon": "imgs/plugin",
+      "Controllers": ["Keypad"],
+      "States": [{ "Image": "imgs/plugin", "TitleAlignment": "bottom", "FontSize": "9" }],
+      "SupportedInMultiActions": false
+    }
+  ]
+}
