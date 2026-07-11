@@ -1,0 +1,9 @@
+services:
+  psn-messenger:
+    build: .
+    environment:
+      - NPSSO_TOKEN=${NPSSO_TOKEN}
+      - GROUP_ID=${GROUP_ID}
+    ports:
+      - "3001:3000"
+    restart: unless-stopped
