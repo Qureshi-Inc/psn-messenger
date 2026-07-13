@@ -24,6 +24,51 @@
       "Controllers": ["Keypad"],
       "States": [{ "Image": "imgs/plugin", "TitleAlignment": "bottom", "FontSize": "9" }],
       "SupportedInMultiActions": false
+    },
+    {
+      "UUID": "com.psn.slapper.icedcap",
+      "Name": "Iced Cap Story",
+      "Tooltip": "Send 'Iced Cap STORRYYY!' to PSN group",
+      "Icon": "imgs/plugin",
+      "Controllers": ["Keypad"],
+      "States": [{ "Image": "imgs/plugin", "TitleAlignment": "bottom", "FontSize": "9" }],
+      "SupportedInMultiActions": false
+    },
+    {
+      "UUID": "com.psn.slapper.waterbreak",
+      "Name": "Water Break",
+      "Tooltip": "Send 'Water break!' to PSN group",
+      "Icon": "imgs/plugin",
+      "Controllers": ["Keypad"],
+      "States": [{ "Image": "imgs/plugin", "TitleAlignment": "bottom", "FontSize": "9" }],
+      "SupportedInMultiActions": false
+    },
+    {
+      "UUID": "com.psn.slapper.never",
+      "Name": "Never",
+      "Tooltip": "Send 'Never' to PSN group",
+      "Icon": "imgs/plugin",
+      "Controllers": ["Keypad"],
+      "States": [{ "Image": "imgs/plugin", "TitleAlignment": "bottom", "FontSize": "9" }],
+      "SupportedInMultiActions": false
+    },
+    {
+      "UUID": "com.psn.slapper.roaststart",
+      "Name": "Start Roast",
+      "Tooltip": "Start AI roast bot",
+      "Icon": "imgs/plugin",
+      "Controllers": ["Keypad"],
+      "States": [{ "Image": "imgs/plugin", "TitleAlignment": "bottom", "FontSize": "9" }],
+      "SupportedInMultiActions": false
+    },
+    {
+      "UUID": "com.psn.slapper.roaststop",
+      "Name": "Stop Roast",
+      "Tooltip": "Stop AI roast bot",
+      "Icon": "imgs/plugin",
+      "Controllers": ["Keypad"],
+      "States": [{ "Image": "imgs/plugin", "TitleAlignment": "bottom", "FontSize": "9" }],
+      "SupportedInMultiActions": false
     }
   ]
 }

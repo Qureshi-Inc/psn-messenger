@@ -114,3 +114,29 @@ def v2_get_messages(limit: int = 5):
     except Exception as e:
         logger.error(f"v2: Get messages failed: {e}")
         raise HTTPException(status_code=500, detail=str(e))
+
+
+# === Roast Bot routes ===
+
+import roast_bot
+
+
+@app.post("/roast/start")
+async def roast_start():
+    if roast_bot.is_running():
+        return {"status": "already running"}
+    roast_bot.start()
+    return {"status": "started", "message": "Roast bot activated 🔥"}
+
+
+@app.post("/roast/stop")
+async def roast_stop():
+    if not roast_bot.is_running():
+        return {"status": "already stopped"}
+    roast_bot.stop()
+    return {"status": "stopped", "message": "Roast bot deactivated"}
+
+
+@app.get("/roast/status")
+def roast_status():
+    return {"running": roast_bot.is_running()}
