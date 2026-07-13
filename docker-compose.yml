@@ -6,4 +6,9 @@ services:
       - GROUP_ID=${GROUP_ID}
     ports:
       - "3001:3000"
+    volumes:
+      - psn_data:/data
     restart: unless-stopped
+
+volumes:
+  psn_data:

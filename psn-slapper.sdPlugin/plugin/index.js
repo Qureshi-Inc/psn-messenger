@@ -1,22 +1,17 @@
 const http = require("http");
 const { StreamDock } = require("./streamdock");
 const { makeCanvas, text, rect, pngDataUri } = require("./canvas");
+const IDLE_ICON = require("./icon");
 
-const PSN_API_URL = process.env.PSN_MESSENGER_URL || "http://192.168.5.54:3001";
+const PSN_API_URL = process.env.PSN_MESSENGER_URL || "http://192.168.5.54:3021";
 const MESSAGE = "Have you ever?";
 
 const W = 126, H = 126;
 const sd = new StreamDock();
 const contexts = new Set();
 
-async function renderIdle() {
-  const { img, ctx } = makeCanvas(W, H);
-  rect(ctx, 0, 0, W, H, "#003087");
-  text(ctx, "PSN", 63, 40, 14, "#ffffff", "center", "DeckBold");
-  text(ctx, "Have you", 63, 70, 10, "#ffffff", "center");
-  text(ctx, "ever?", 63, 88, 10, "#ffffff", "center");
-  text(ctx, "TAP TO SEND", 63, 115, 7, "#aaaaaa", "center");
-  return pngDataUri(img);
+function renderIdle() {
+  return IDLE_ICON;
 }
 
 async function renderSending() {

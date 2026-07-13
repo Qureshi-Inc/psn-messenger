@@ -62,3 +62,55 @@ def get_messages(limit: int = 5):
     except Exception as e:
         logger.error(f"Failed to get messages: {e}")
         raise HTTPException(status_code=500, detail=str(e))
+
+
+# === V2 routes: PSN API with auto-refresh tokens ===
+
+try:
+    from psn_auth import PSNAuth
+    from psn_messaging import PSNMessenger
+
+    psn_auth = PSNAuth(NPSSO_TOKEN)
+    psn_messenger = PSNMessenger(psn_auth, GROUP_ID)
+    logger.info("v2: PSN auth initialized with token persistence")
+    _v2_available = True
+except Exception as e:
+    logger.warning(f"v2: PSN auth failed to initialize: {e}")
+    _v2_available = False
+
+
+@app.get("/v2/health")
+def v2_health():
+    if not _v2_available:
+        raise HTTPException(status_code=503, detail="v2 auth not initialized")
+    return {"status": "ok", "version": "v2", "group": GROUP_ID}
+
+
+@app.post("/v2/send")
+def v2_send_message(req: MessageRequest):
+    if not _v2_available:
+        raise HTTPException(status_code=503, detail="v2 auth not initialized")
+    if not req.message.strip():
+        raise HTTPException(status_code=400, detail="Message cannot be empty")
+    try:
+        success = psn_messenger.send_message(req.message.strip())
+        if success:
+            return {"status": "sent", "message": req.message.strip(), "version": "v2"}
+        raise HTTPException(status_code=500, detail="Failed to send message")
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"v2: Send failed: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.get("/v2/messages")
+def v2_get_messages(limit: int = 5):
+    if not _v2_available:
+        raise HTTPException(status_code=503, detail="v2 auth not initialized")
+    try:
+        messages = psn_messenger.get_messages(limit)
+        return {"messages": messages, "version": "v2"}
+    except Exception as e:
+        logger.error(f"v2: Get messages failed: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
