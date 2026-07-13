@@ -124,11 +124,32 @@ def send_roast(message: str) -> bool:
 
 
 async def roast_loop():
-    """Main loop — sends a roast every 5-7 minutes."""
+    """Main loop — sends first roast immediately, then every 5-7 minutes."""
     global _running
     logger.info("Roast bot started 🔥")
 
+    # Send first roast immediately
+    try:
+        roast = generate_roast()
+        success = send_roast(roast)
+        if success:
+            logger.info("First roast sent: %s", roast[:50])
+    except Exception as e:
+        logger.error("First roast failed: %s", e)
+
     while _running:
+        logger.info("Next roast in %d seconds", delay)
+
+        # Sleep in small chunks so we can stop quickly
+        for _ in range(delay):
+            if not _running:
+                break
+            await asyncio.sleep(1)
+
+        if not _running:
+            break
+
+        # Send next roast
         try:
             roast = generate_roast()
             success = send_roast(roast)
@@ -138,16 +159,6 @@ async def roast_loop():
                 logger.error("Failed to send roast")
         except Exception as e:
             logger.error("Roast generation failed: %s", e)
-
-        # Wait 5-7 minutes
-        delay = random.randint(300, 420)
-        logger.info("Next roast in %d seconds", delay)
-
-        # Sleep in small chunks so we can stop quickly
-        for _ in range(delay):
-            if not _running:
-                break
-            await asyncio.sleep(1)
 
     logger.info("Roast bot stopped")
 
