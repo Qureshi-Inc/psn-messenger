@@ -137,6 +137,18 @@ async def roast_stop():
     return {"status": "stopped", "message": "Roast bot deactivated"}
 
 
+@app.post("/roast/once")
+async def roast_once():
+    """Send one roast immediately."""
+    try:
+        roast = roast_bot.generate_single_roast()
+        roast_bot.send_roast(roast)
+        return {"status": "sent", "roast": roast}
+    except Exception as e:
+        logger.error(f"Roast once failed: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
 @app.get("/roast/status")
 def roast_status():
     return {"running": roast_bot.is_running()}

@@ -69,6 +69,15 @@
       "Controllers": ["Keypad"],
       "States": [{ "Image": "imgs/plugin", "TitleAlignment": "bottom", "FontSize": "9" }],
       "SupportedInMultiActions": false
+    },
+    {
+      "UUID": "com.psn.slapper.roastnow",
+      "Name": "Roast Now",
+      "Tooltip": "Send one roast immediately",
+      "Icon": "imgs/plugin",
+      "Controllers": ["Keypad"],
+      "States": [{ "Image": "imgs/plugin", "TitleAlignment": "bottom", "FontSize": "9" }],
+      "SupportedInMultiActions": false
     }
   ]
 }

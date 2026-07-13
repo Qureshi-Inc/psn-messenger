@@ -13,6 +13,22 @@ logger = logging.getLogger(__name__)
 
 PSN_API_URL = "http://127.0.0.1:3000/v2/send"
 
+INSIDER_LINES = [
+    "{name} you hella weakk!",
+    "{name}, have you ever? 👉👌",
+    "you hear that shit!!",
+    "{name} is COOKED 💀",
+    "{name} down bad fr fr",
+    "bro {name} is free",
+    "{name} just vibing in the lobby again",
+    "someone check on {name} 😭",
+    "iced cap merchant {name}",
+    "{name} rage quit incoming",
+    "did {name} just die AGAIN?",
+    "{name} playing like its his first day",
+    "yo {name} extract for once challenge (IMPOSSIBLE)",
+]
+
 FRIENDS_CONTEXT = """
 You are a savage but funny roast bot in a PSN gaming group chat. Generate short, punchy roasts (1-2 sentences max) about these friends:
 
@@ -62,9 +78,15 @@ _task = None
 
 
 def generate_roast() -> str:
-    """Generate a roast using Bedrock Claude."""
+    """Generate a roast — mix of AI and insider one-liners."""
     friends = ["Mutasif", "Samad", "Brenden", "Zubi"]
     target = random.choice(friends)
+
+    # 30% chance of insider one-liner, 70% AI generated
+    if random.random() < 0.3:
+        line = random.choice(INSIDER_LINES).format(name=target)
+        logger.info("Insider roast for %s: %s", target, line)
+        return line
 
     response = _client.invoke_model(
         modelId="us.anthropic.claude-3-haiku-20240307-v1:0",
@@ -85,8 +107,13 @@ def generate_roast() -> str:
 
     result = json.loads(response["body"].read())
     roast = result["content"][0]["text"].strip()
-    logger.info("Generated roast for %s: %s", target, roast[:50])
+    logger.info("AI roast for %s: %s", target, roast[:50])
     return roast
+
+
+def generate_single_roast() -> str:
+    """Generate one roast immediately (for on-demand button)."""
+    return generate_roast()
 
 
 def send_roast(message: str) -> bool:

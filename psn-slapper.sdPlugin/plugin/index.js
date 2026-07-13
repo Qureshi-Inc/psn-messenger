@@ -107,12 +107,22 @@ async function renderIdleRoastStop() {
   return pngDataUri(img);
 }
 
+async function renderIdleRoastNow() {
+  const { img, ctx } = makeCanvas(W, H);
+  rect(ctx, 0, 0, W, H, "#ff6f00");
+  text(ctx, "💀", 63, 45, 20, "#ffffff", "center");
+  text(ctx, "ROAST", 63, 78, 11, "#ffffff", "center", "DeckBold");
+  text(ctx, "NOW", 63, 98, 11, "#ffffff", "center", "DeckBold");
+  return pngDataUri(img);
+}
+
 async function getIdleImage(action) {
   if (action === "com.psn.slapper.icedcap") return renderIdleIcedCap();
   if (action === "com.psn.slapper.waterbreak") return renderIdleWaterBreak();
   if (action === "com.psn.slapper.never") return renderIdleNever();
   if (action === "com.psn.slapper.roaststart") return renderIdleRoastStart();
   if (action === "com.psn.slapper.roaststop") return renderIdleRoastStop();
+  if (action === "com.psn.slapper.roastnow") return renderIdleRoastNow();
   return renderIdle();
 }
 
@@ -153,6 +163,19 @@ async function handlePress(context) {
     sd.setImage(context, await renderSending());
     try {
       await callEndpoint("/roast/stop");
+      sd.setImage(context, await renderSent());
+      setTimeout(async () => { sd.setImage(context, await getIdleImage(action)); }, 2000);
+    } catch (e) {
+      sd.setImage(context, await renderError());
+      setTimeout(async () => { sd.setImage(context, await getIdleImage(action)); }, 3000);
+    }
+    return;
+  }
+
+  if (action === "com.psn.slapper.roastnow") {
+    sd.setImage(context, await renderSending());
+    try {
+      await callEndpoint("/roast/once");
       sd.setImage(context, await renderSent());
       setTimeout(async () => { sd.setImage(context, await getIdleImage(action)); }, 2000);
     } catch (e) {
