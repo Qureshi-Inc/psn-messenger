@@ -67,7 +67,7 @@ def generate_roast() -> str:
     target = random.choice(friends)
 
     response = _client.invoke_model(
-        modelId="anthropic.claude-haiku-4-5-20251001-v1:0",
+        modelId="us.anthropic.claude-3-haiku-20240307-v1:0",
         contentType="application/json",
         accept="application/json",
         body=json.dumps({
