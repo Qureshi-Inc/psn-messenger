@@ -99,7 +99,7 @@ def generate_roast() -> str:
             "messages": [
                 {
                     "role": "user",
-                    "content": f"{FRIENDS_CONTEXT}\n\nGenerate a roast about {target}. Just the roast text, nothing else."
+                    "content": f"{FRIENDS_CONTEXT}\n\nGenerate a roast about {target}. Start the message with their name. Just the roast text, nothing else."
                 }
             ]
         }),
