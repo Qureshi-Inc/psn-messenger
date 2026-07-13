@@ -89,7 +89,7 @@ def generate_roast() -> str:
         return line
 
     response = _client.invoke_model(
-        modelId="us.anthropic.claude-3-haiku-20240307-v1:0",
+        modelId="us.anthropic.claude-sonnet-4-20250514-v1:0",
         contentType="application/json",
         accept="application/json",
         body=json.dumps({
