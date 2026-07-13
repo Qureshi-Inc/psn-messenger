@@ -130,8 +130,8 @@ async def roast_loop():
 
     # Send first roast immediately
     try:
-        roast = generate_roast()
-        success = send_roast(roast)
+        roast = await asyncio.to_thread(generate_roast)
+        success = await asyncio.to_thread(send_roast, roast)
         if success:
             logger.info("First roast sent: %s", roast[:50])
     except Exception as e:
@@ -152,8 +152,8 @@ async def roast_loop():
 
         # Send next roast
         try:
-            roast = generate_roast()
-            success = send_roast(roast)
+            roast = await asyncio.to_thread(generate_roast)
+            success = await asyncio.to_thread(send_roast, roast)
             if success:
                 logger.info("Roast sent: %s", roast[:50])
             else:
