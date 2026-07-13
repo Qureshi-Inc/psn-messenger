@@ -23,6 +23,9 @@ class PSNMessenger:
         return {
             "Authorization": f"Bearer {self._auth.access_token}",
             "Content-Type": "application/json",
+            "User-Agent": "Mozilla/5.0 (Linux; Android 11; sdk_gphone_x86 Build/RSR1.201013.001; wv) AppleWebKit/537.36 (KHTML, like Gecko) Version/4.0 Chrome/83.0.4103.106 Mobile Safari/537.36",
+            "Accept-Language": "en-US,en;q=0.9",
+            "Country": "US",
         }
 
     def send_message(self, message: str) -> bool:
