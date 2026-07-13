@@ -138,6 +138,7 @@ async def roast_loop():
         logger.error("First roast failed: %s", e)
 
     while _running:
+        delay = random.randint(300, 420)
         logger.info("Next roast in %d seconds", delay)
 
         # Sleep in small chunks so we can stop quickly
