@@ -21,8 +21,9 @@ AUTH_URL = "https://ca.account.sony.com/api/authz/v3/oauth/authorize"
 TOKEN_URL = "https://ca.account.sony.com/api/authz/v3/oauth/token"
 
 # Client credentials for PlayStation app
-CLIENT_ID = "09515159-7ef5-4e03-b682-b2c5e6a6b603"
-CLIENT_SECRET = "wmLUFbX3Rf"
+CLIENT_ID = "09515159-7237-4370-9b40-3806e67c0891"
+CLIENT_SECRET = "ucPjka5tntB2KqsP"
+AUTH_HEADER = "Basic MDk1MTUxNTktNzIzNy00MzcwLTliNDAtMzgwNmU2N2MwODkxOnVjUGprYTV0bnRCMktxc1A="
 SCOPE = "psn:mobile.v2.core psn:clientapp"
 REDIRECT_URI = "com.scee.psxandroid.scecompcall://redirect"
 
@@ -105,9 +106,13 @@ class PSNAuth:
                     "grant_type": "authorization_code",
                     "code": code,
                     "redirect_uri": REDIRECT_URI,
+                    "scope": SCOPE,
+                    "token_format": "jwt",
                 },
-                auth=(CLIENT_ID, CLIENT_SECRET),
-                headers={"Content-Type": "application/x-www-form-urlencoded"},
+                headers={
+                    "Content-Type": "application/x-www-form-urlencoded",
+                    "Authorization": AUTH_HEADER,
+                },
             )
 
         if resp.status_code != 200:
@@ -127,9 +132,12 @@ class PSNAuth:
                         "grant_type": "refresh_token",
                         "refresh_token": self._refresh_token,
                         "scope": SCOPE,
+                        "token_format": "jwt",
                     },
-                    auth=(CLIENT_ID, CLIENT_SECRET),
-                    headers={"Content-Type": "application/x-www-form-urlencoded"},
+                    headers={
+                        "Content-Type": "application/x-www-form-urlencoded",
+                        "Authorization": AUTH_HEADER,
+                    },
                 )
 
             if resp.status_code != 200:
