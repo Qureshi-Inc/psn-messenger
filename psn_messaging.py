@@ -8,7 +8,7 @@ from psn_auth import PSNAuth
 
 logger = logging.getLogger(__name__)
 
-PSN_MESSAGING_BASE = "https://dms.api.playstation.com/api"
+PSN_MESSAGING_BASE = "https://m.np.playstation.com/api/gamingLoungeGroups/v1"
 
 
 class PSNMessenger:
@@ -48,7 +48,7 @@ class PSNMessenger:
 
     def get_messages(self, limit: int = 5) -> list[dict]:
         """Get recent messages from the group."""
-        url = f"{PSN_MESSAGING_BASE}/members/me/groups/{self._group_id}/threads/{self._group_id}/messages"
+        url = f"{PSN_MESSAGING_BASE}/groups/{self._group_id}/threads/{self._group_id}/messages"
         params = {"limit": str(limit)}
 
         with httpx.Client(timeout=15) as client:
