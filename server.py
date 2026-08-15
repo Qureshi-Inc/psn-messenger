@@ -741,6 +741,39 @@ import psn_data
 # "online right now". This is the ONLY periodic PSN caller; viewers read cache.
 _poller_started = False
 
+import mattermost as mm_client
+
+# ARC Raiders alert: when a squad member STARTS playing it, DM these people.
+# Match is substring/case-insensitive so "ARC Raiders" variants all catch.
+_ARC_MATCH = "arc raider"
+_ARC_NOTIFY = ["themoosecompany", "zubair221b", "deception", "moiz"]
+# Track who we've already alerted for (edge detection) so we DM once per session,
+# not every minute. A player drops out of the set when they stop playing ARC.
+_arc_playing: set[str] = set()
+
+
+def _check_arc_alert(squad: list[dict]) -> None:
+    """DM the notify list when someone newly starts playing ARC Raiders."""
+    if not mm_client.available():
+        return
+    now_playing = {
+        m.get("online_id")
+        for m in squad
+        if m.get("playing") and _ARC_MATCH in (m.get("game") or "").lower()
+    }
+    started = now_playing - _arc_playing
+    for player in started:
+        msg = (
+            f"🎮🔫 **{player}** just hopped on **ARC Raiders**! "
+            "Squad up — who's in? 💥"
+        )
+        sent = mm_client.dm_users(_ARC_NOTIFY, msg)
+        logger.info("arc alert: %s started ARC Raiders -> DM'd %d", player, sent)
+    # Reset the tracking set to whoever is currently playing (so a stop->start
+    # later re-alerts, but continuous play doesn't).
+    _arc_playing.clear()
+    _arc_playing.update(now_playing)
+
 
 @app.on_event("startup")
 async def _start_squad_poller():
@@ -757,7 +790,8 @@ async def _start_squad_poller():
                 # Force a real refresh by bypassing the freshness check: reset
                 # the cache timestamp so squad_status re-sweeps, then call it.
                 psn_data._cache["at"] = 0.0
-                await asyncio.to_thread(psn_data.squad_status, psn_auth)
+                squad = await asyncio.to_thread(psn_data.squad_status, psn_auth)
+                await asyncio.to_thread(_check_arc_alert, squad)
             except Exception as e:  # noqa: BLE001
                 logger.debug("squad poller tick failed: %s", e)
             await asyncio.sleep(60)
