@@ -44,9 +44,12 @@ PSN_LOGIN_URL = "https://www.playstation.com/"
 NPSSO_TOKEN_URL = "https://ca.account.sony.com/api/v1/ssocookie"
 
 # Where we read the linked user's PSN profile (online id + account id).
+# The legacy community endpoint reliably returns both when we ask for the
+# fields explicitly (the newer m.np.playstation.com one 400s for "me").
 PROFILE_URL = (
-    "https://m.np.playstation.com/api/userProfile/v1/internal/users/me/profiles"
+    "https://us-prof.np.community.playstation.net/userProfile/v1/users/me/profile2"
 )
+PROFILE_FIELDS = "onlineId,accountId"
 
 _PROFILE_HEADERS = {
     "Accept-Language": "en-US,en;q=0.9",
@@ -139,7 +142,9 @@ def _fetch_profile(access_token: str) -> dict:
     headers["Authorization"] = f"Bearer {access_token}"
     try:
         with httpx.Client(timeout=15) as client:
-            resp = client.get(PROFILE_URL, headers=headers)
+            resp = client.get(
+                PROFILE_URL, params={"fields": PROFILE_FIELDS}, headers=headers
+            )
         if resp.status_code == 200:
             data = resp.json()
             prof = data.get("profile", data)
