@@ -338,3 +338,153 @@ def portal_users(key: str = ""):
     if PORTAL_PASSCODE and key != PORTAL_PASSCODE:
         raise HTTPException(status_code=403, detail="forbidden")
     return {"users": portal_mod.list_users()}
+
+
+# === Squad Dashboard (psn.qureshi.io home) ===
+#
+# Live view of everyone linked via the portal: who's online, what they're
+# playing, plus one-tap actions (Squad Up, Game Time, Roast) wired to the
+# existing endpoints. Data comes from psn_data using the bot's auth.
+
+import psn_data
+
+
+@app.get("/api/squad")
+def api_squad():
+    """Live presence + avatars for every linked account (JSON, for the UI)."""
+    if not _v2_available:
+        return JSONResponse({"squad": [], "error": "auth unavailable"})
+    try:
+        return {"squad": psn_data.squad_status(psn_auth)}
+    except Exception as e:  # noqa: BLE001
+        logger.error("dashboard: squad status failed: %s", e)
+        return JSONResponse({"squad": [], "error": str(e)}, status_code=500)
+
+
+@app.get("/", response_class=HTMLResponse)
+@app.get("/dashboard", response_class=HTMLResponse)
+def dashboard():
+    return HTMLResponse(_DASHBOARD_HTML)
+
+
+_DASHBOARD_HTML = """<!doctype html>
+<html lang="en"><head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>The Squad · PSN</title>
+<style>
+  :root { color-scheme: dark; }
+  * { box-sizing: border-box; }
+  body { margin:0; font-family:-apple-system,system-ui,Segoe UI,Roboto,sans-serif;
+    background:radial-gradient(1200px 600px at 50% -10%,#182a4e 0%,#0b1020 55%),#0b1020;
+    color:#e9edf5; min-height:100vh; }
+  .wrap { max-width:820px; margin:0 auto; padding:22px 16px 60px; }
+  header { display:flex; align-items:center; justify-content:space-between; margin-bottom:6px; }
+  h1 { font-size:22px; margin:0; }
+  .sub { color:#9aa7c4; font-size:13px; margin:0 0 20px; }
+  .actions { display:grid; grid-template-columns:repeat(auto-fit,minmax(150px,1fr));
+    gap:10px; margin-bottom:26px; }
+  .act { border:none; border-radius:13px; padding:15px 12px; font-size:15px; font-weight:700;
+    cursor:pointer; color:#fff; transition:transform .06s ease, filter .15s ease; }
+  .act:active { transform:scale(.97); }
+  .act:hover { filter:brightness(1.1); }
+  .squad { background:#0070d1; }  .game { background:#1b7f3b; }
+  .roast { background:#c0392b; }  .roaststop { background:#3a4664; }
+  .card { background:#141b31; border:1px solid #26324f; border-radius:16px; padding:18px; }
+  .row { display:flex; align-items:center; gap:13px; padding:11px 6px;
+    border-bottom:1px solid #202b45; }
+  .row:last-child { border-bottom:none; }
+  .av { width:46px; height:46px; border-radius:12px; background:#22304f; object-fit:cover;
+    flex:none; }
+  .who { flex:1; min-width:0; }
+  .name { font-weight:600; font-size:15px; }
+  .mm { color:#6f7ea3; font-size:12px; }
+  .state { font-size:13px; color:#9aa7c4; margin-top:2px; white-space:nowrap;
+    overflow:hidden; text-overflow:ellipsis; }
+  .dot { display:inline-block; width:9px; height:9px; border-radius:50%; margin-right:6px;
+    vertical-align:middle; background:#4a5677; }
+  .on .dot { background:#2ecc71; box-shadow:0 0 8px #2ecc71; }
+  .on .name { color:#eafff2; }
+  .game-badge { color:#8ff0b6; }
+  .empty { color:#7d8ab0; text-align:center; padding:26px 10px; font-size:14px; }
+  .toast { position:fixed; left:50%; bottom:22px; transform:translateX(-50%);
+    background:#1b2540; border:1px solid #33436b; color:#e9edf5;
+    padding:11px 18px; border-radius:12px; font-size:14px; opacity:0; pointer-events:none;
+    transition:opacity .2s; }
+  .toast.show { opacity:1; }
+  .foot { margin-top:22px; text-align:center; }
+  .foot a { color:#5a9bff; font-size:13px; text-decoration:none; }
+  .spin { color:#7d8ab0; text-align:center; padding:24px; }
+</style></head>
+<body><div class="wrap">
+  <header>
+    <h1>🎮 The Squad</h1>
+    <span class="sub" id="onlinecount"></span>
+  </header>
+  <p class="sub">Live PlayStation status · tap an action to rally everyone</p>
+
+  <div class="actions">
+    <button class="act squad" onclick="act('/v2/squad','Squad Up sent! 🎮')">🎮 Squad Up</button>
+    <button class="act game" onclick="act('/v2/send','Game Time sent! 🕹️','🎮🔥 Let\\'s party up y\\'all. It\\'s GAME TIME! 🕹️💥')">🕹️ Game Time</button>
+    <button class="act roast" onclick="act('/roast/once','Roast fired 🔥')">🔥 Roast Now</button>
+    <button class="act roaststop" onclick="act('/roast/stop','Roast bot stopped')">🛑 Stop Roast</button>
+  </div>
+
+  <div class="card" id="squad"><div class="spin">Loading squad…</div></div>
+
+  <div class="foot"><a href="/portal">＋ Link a PlayStation account</a></div>
+</div>
+<div class="toast" id="toast"></div>
+<script>
+const toast = (m) => { const t=document.getElementById('toast'); t.textContent=m;
+  t.classList.add('show'); setTimeout(()=>t.classList.remove('show'),2200); };
+
+async function act(path, okMsg, message) {
+  try {
+    const opts = { method:'POST' };
+    if (message) { opts.headers={'Content-Type':'application/json'};
+      opts.body=JSON.stringify({message}); }
+    const r = await fetch(path, opts);
+    toast(r.ok ? okMsg : 'Failed ('+r.status+')');
+  } catch(e) { toast('Network error'); }
+}
+
+function fmtLast(iso){ if(!iso) return 'offline';
+  const d=new Date(iso), now=new Date(), s=(now-d)/1000;
+  if(s<3600) return Math.max(1,Math.floor(s/60))+'m ago';
+  if(s<86400) return Math.floor(s/3600)+'h ago';
+  return Math.floor(s/86400)+'d ago'; }
+
+async function loadSquad(){
+  try {
+    const r = await fetch('/api/squad'); const {squad=[]} = await r.json();
+    const el = document.getElementById('squad');
+    const online = squad.filter(m=>m.online).length;
+    document.getElementById('onlinecount').textContent =
+      squad.length ? (online+' / '+squad.length+' online') : '';
+    if(!squad.length){ el.innerHTML =
+      '<div class="empty">No one linked yet.<br>Share the link below to add the squad.</div>';
+      return; }
+    el.innerHTML = squad.map(m=>{
+      const name = m.online_id || m.mm_username || 'Unknown';
+      const av = m.avatar || '';
+      const avImg = av ? '<img class="av" src="'+av+'" alt="">' : '<div class="av"></div>';
+      let state;
+      if(m.online){ state = m.game
+        ? '<span class="game-badge">Playing '+m.game+'</span>'
+        : 'Online'+(m.platform?' · '+m.platform:''); }
+      else state = 'Last online '+fmtLast(m.last_online);
+      const mm = m.mm_username ? '<span class="mm"> @'+m.mm_username+'</span>' : '';
+      return '<div class="row '+(m.online?'on':'')+'">'+avImg+
+        '<div class="who"><div class="name"><span class="dot"></span>'+name+mm+'</div>'+
+        '<div class="state">'+state+'</div></div></div>';
+    }).join('');
+  } catch(e){
+    document.getElementById('squad').innerHTML =
+      '<div class="empty">Couldn\\'t load squad status.</div>';
+  }
+}
+loadSquad();
+setInterval(loadSquad, 30000);  // refresh every 30s
+</script>
+</body></html>"""
