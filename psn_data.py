@@ -20,6 +20,8 @@ USERS_DIR = Path("/data/users")
 
 API = "https://m.np.playstation.com/api/userProfile/v1/internal/users"
 PROFILE2 = "https://us-prof.np.community.playstation.net/userProfile/v1/users"
+TROPHY = "https://m.np.playstation.com/api/trophy/v1"
+GAMELIST = "https://m.np.playstation.com/api/gamelist/v2"
 
 _UA = (
     "Mozilla/5.0 (Linux; Android 11; sdk_gphone_x86 Build/RSR1.201013.001; wv) "
@@ -204,13 +206,67 @@ def _avatar(client: httpx.Client, token: str, online_id: str) -> str | None:
     return None
 
 
-def squad_status(auth) -> list[dict]:
-    """Full presence + avatar for every linked account. `auth` is a PSNAuth.
+def _trophy_summary(client: httpx.Client, token: str, account_id: str, own: bool) -> dict:
+    """Trophy level, tier, points and platinum/gold/silver/bronze counts."""
+    who = "me" if own else account_id
+    try:
+        r = client.get(
+            f"{TROPHY}/users/{who}/trophySummary",
+            headers=_headers(token),
+            timeout=15,
+        )
+        if r.status_code != 200:
+            return {}
+        d = r.json()
+        e = d.get("earnedTrophies", {})
+        return {
+            "trophy_level": d.get("trophyLevel"),
+            "trophy_tier": d.get("tier"),
+            "trophy_progress": d.get("progress"),
+            "platinum": e.get("platinum", 0),
+            "gold": e.get("gold", 0),
+            "silver": e.get("silver", 0),
+            "bronze": e.get("bronze", 0),
+            "trophy_total": sum(
+                e.get(k, 0) for k in ("platinum", "gold", "silver", "bronze")
+            ),
+        }
+    except Exception as exc:  # noqa: BLE001
+        logger.debug("trophy summary failed for %s: %s", account_id, exc)
+        return {}
 
-    Prefers each user's OWN token for their presence (self-query, authoritative
+
+def _recent_game(client: httpx.Client, token: str) -> dict:
+    """Most recently played title (self-token only) with its art."""
+    try:
+        r = client.get(
+            f"{GAMELIST}/users/me/titles",
+            params={"categories": "ps4_game,ps5_native_game", "limit": "1"},
+            headers=_headers(token),
+            timeout=15,
+        )
+        if r.status_code != 200:
+            return {}
+        titles = r.json().get("titles") or []
+        if not titles:
+            return {}
+        t = titles[0]
+        img = (t.get("imageUrl") or "").replace("http://", "https://")
+        return {"recent_game": t.get("name"), "recent_game_icon": img}
+    except Exception:  # noqa: BLE001
+        return {}
+
+
+def squad_status(auth, include_stats: bool = True) -> list[dict]:
+    """Full presence (+ optional trophy stats) for every linked account.
+
+    Prefers each user's OWN token for presence/stats (self-query, authoritative
     and privacy-proof); falls back to the bot's token by account id if a user's
-    token can't be refreshed.
+    token can't be refreshed. `auth` is a PSNAuth.
     """
+    # Members = portal-linked accounts only. We deliberately do NOT surface the
+    # bot's PSN friend graph -- showing accounts we can only see via the bot's
+    # NPSSO friend access (and their friends) isn't something we expose.
     accounts = linked_accounts()
     if not accounts:
         return []
@@ -218,21 +274,19 @@ def squad_status(auth) -> list[dict]:
     out: list[dict] = []
     with httpx.Client() as client:
         for a in accounts:
-            utok = _user_token(a)
-            if utok:
-                pres = _presence(client, utok, a["account_id"], own=True)
-            else:
-                # No usable user token -> look them up with the bot's token.
-                pres = _presence(client, bot_token, a["account_id"])
-            # Avatars are public; the bot's token is fine and avoids extra work.
+            utok = _user_token(a)  # only linked accounts have a token file
+            own = bool(utok)
+            tok = utok or bot_token
+            pres = _presence(client, tok, a["account_id"], own=own)
             entry = {k: v for k, v in a.items() if not k.startswith("_")}
-            out.append(
-                {
-                    **entry,
-                    **pres,
-                    "avatar": _avatar(client, bot_token, a.get("online_id")),
-                }
-            )
+            entry.update(pres)
+            entry["linked"] = own
+            entry["avatar"] = _avatar(client, bot_token, a.get("online_id"))
+            if include_stats:
+                entry.update(_trophy_summary(client, tok, a["account_id"], own))
+                if own:
+                    entry.update(_recent_game(client, tok))
+            out.append(entry)
     # Sort: in-game first, then online-on-menus, then offline; then by name.
     out.sort(
         key=lambda x: (

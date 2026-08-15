@@ -693,7 +693,7 @@ import psn_data
 
 @app.get("/api/squad")
 def api_squad():
-    """Live presence + avatars for every linked account (JSON, for the UI)."""
+    """Live presence + trophy stats for every squad member (JSON, for the UI)."""
     if not _v2_available:
         return JSONResponse({"squad": [], "error": "auth unavailable"})
     try:
@@ -706,147 +706,256 @@ def api_squad():
 @app.get("/", response_class=HTMLResponse)
 @app.get("/dashboard", response_class=HTMLResponse)
 def dashboard():
-    return HTMLResponse(_DASHBOARD_HTML)
+    return HTMLResponse(_dashboard_html())
 
 
-_DASHBOARD_HTML = """<!doctype html>
+
+
+# The dashboard's fun "soundboard" buttons. Each posts a canned message to the
+# squad PSN group via /v2/squad {message}. Kept in one list so it's easy to add
+# more. `cls` picks a color; `msg` None means it hits a non-message action path.
+_SOUNDBOARD = [
+    {"label": "👉👌 Have you ever?", "msg": "Have you ever? 👉👌", "cls": "c1"},
+    {"label": "🧊☕ Iced Cap STORY", "msg": "🧊☕ Iced Cap STORRYYY! 📖✨", "cls": "c2"},
+    {"label": "🙅‍♂️ Never", "msg": "Never 🙅‍♂️❌", "cls": "c3"},
+    {"label": "💧 Water Break", "msg": "💧 Water break! 🚰💦", "cls": "c4"},
+    {"label": "🎬 Zubi Clip It", "msg": "🎬 ZUBI CLIP IT!! 📸🔥 That was insane!", "cls": "c5"},
+    {"label": "🎮 Squad Up", "msg": "🎮🔥 SQUAD UP! Who's hopping on? 🕹️💥", "cls": "c1"},
+    {"label": "🕹️ Game Time", "msg": "🎮🔥 Let's party up y'all. It's GAME TIME! 🕹️💥", "cls": "c2"},
+    {"label": "😴 Wake Up", "msg": "😴⏰ WAKE UP! The squad needs you! 🎮", "cls": "c4"},
+    {"label": "🏆 Clutch!", "msg": "🏆🔥 CLUTCH!! What a play! 👏👏", "cls": "c5"},
+    {"label": "💀 GG EZ", "msg": "💀 GG EZ 😎🎮", "cls": "c3"},
+    {"label": "🍕 Food Break", "msg": "🍕 Food break y'all — brb 🤤", "cls": "c4"},
+    {"label": "🔥 Roast Now", "path": "/roast/once", "cls": "roast"},
+]
+
+
+def _soundboard_json() -> str:
+    import json as _json
+    return _json.dumps(_SOUNDBOARD)
+
+
+def _dashboard_html() -> str:
+    return _DASHBOARD_TMPL.replace("__SOUNDBOARD__", _soundboard_json())
+
+
+_DASHBOARD_TMPL = r"""<!doctype html>
 <html lang="en"><head>
 <meta charset="utf-8">
-<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
 <title>The Squad · PSN</title>
 <style>
-  :root { color-scheme: dark; }
-  * { box-sizing: border-box; }
-  body { margin:0; font-family:-apple-system,system-ui,Segoe UI,Roboto,sans-serif;
-    background:radial-gradient(1200px 600px at 50% -10%,#182a4e 0%,#0b1020 55%),#0b1020;
-    color:#e9edf5; min-height:100vh; }
-  .wrap { max-width:820px; margin:0 auto; padding:22px 16px 60px; }
-  header { display:flex; align-items:center; justify-content:space-between; margin-bottom:6px; }
-  h1 { font-size:22px; margin:0; }
-  .sub { color:#9aa7c4; font-size:13px; margin:0 0 20px; }
-  .actions { display:grid; grid-template-columns:repeat(auto-fit,minmax(150px,1fr));
-    gap:10px; margin-bottom:26px; }
-  .act { border:none; border-radius:13px; padding:15px 12px; font-size:15px; font-weight:700;
-    cursor:pointer; color:#fff; transition:transform .06s ease, filter .15s ease; }
-  .act:active { transform:scale(.97); }
-  .act:hover { filter:brightness(1.1); }
-  .squad { background:#0070d1; }  .game { background:#1b7f3b; }
-  .roast { background:#c0392b; }  .roaststop { background:#3a4664; }
-  .card { background:#141b31; border:1px solid #26324f; border-radius:16px; padding:18px; }
-  .row { display:flex; align-items:center; gap:13px; padding:11px 6px;
-    border-bottom:1px solid #202b45; }
+  :root { color-scheme:dark;
+    --bg:#070b18; --card:rgba(20,27,49,.72); --line:rgba(120,140,190,.16);
+    --txt:#eaf0ff; --dim:#9fb0d4; --psn:#0070d1; --psn2:#00a3ff; --accent:#7c5cff;
+    --ok:#2ee6a0; --gold:#ffd24a; }
+  * { box-sizing:border-box; -webkit-tap-highlight-color:transparent; }
+  html,body { margin:0; }
+  body { font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif;
+    color:var(--txt); min-height:100dvh; background:var(--bg);
+    padding:0 0 40px; position:relative; overflow-x:hidden; }
+  body::before,body::after { content:""; position:fixed; inset:-30% -10%; z-index:-2;
+    background:
+      radial-gradient(42% 42% at 20% 14%, rgba(0,112,209,.4), transparent 60%),
+      radial-gradient(40% 40% at 82% 20%, rgba(124,92,255,.34), transparent 60%),
+      radial-gradient(48% 42% at 55% 94%, rgba(0,163,255,.26), transparent 62%);
+    filter:blur(32px); animation:drift 22s ease-in-out infinite alternate; }
+  body::after { animation-duration:30s; animation-direction:alternate-reverse; opacity:.6; }
+  @keyframes drift { to { transform:translate3d(4%,3%,0) scale(1.12); } }
+  .wrap { max-width:760px; margin:0 auto; padding:0 14px; }
+
+  .top { display:flex; align-items:center; gap:12px; padding:18px 2px 12px; }
+  .logo { width:44px; height:44px; border-radius:14px; flex:none; display:grid;
+    place-items:center; font-size:24px; background:linear-gradient(135deg,var(--psn),var(--accent));
+    box-shadow:0 10px 28px rgba(0,112,209,.5); }
+  h1 { font-size:20px; margin:0; letter-spacing:.2px; }
+  .tag { color:var(--dim); font-size:12px; margin:2px 0 0; }
+  .top .live { margin-left:auto; text-align:right; font-size:12px; color:var(--dim); }
+  .top .live b { color:var(--ok); font-size:15px; }
+
+  /* STICKY SOUNDBOARD -- the hero. Always at top, compact, tappable. */
+  .board-wrap { position:sticky; top:0; z-index:20; padding:8px 0 12px;
+    background:linear-gradient(180deg, rgba(7,11,24,.94) 60%, rgba(7,11,24,0));
+    backdrop-filter:blur(8px); -webkit-backdrop-filter:blur(8px); }
+  .board-title { font-size:11px; letter-spacing:1.5px; color:var(--dim);
+    text-transform:uppercase; margin:0 4px 8px; font-weight:700; }
+  .board { display:grid; grid-template-columns:repeat(3,1fr); gap:8px; }
+  .snd { border:none; border-radius:14px; padding:14px 8px; font-size:12.5px;
+    font-weight:700; cursor:pointer; color:#fff; line-height:1.25; min-height:58px;
+    display:flex; align-items:center; justify-content:center; text-align:center;
+    box-shadow:0 6px 18px rgba(0,0,0,.35); transition:transform .07s, filter .12s, box-shadow .12s; }
+  .snd:active { transform:scale(.94); }
+  .snd:hover { filter:brightness(1.12); }
+  .snd.flash { animation:flash .5s ease; }
+  @keyframes flash { 0%{ box-shadow:0 0 0 0 rgba(46,230,160,.7);} 100%{ box-shadow:0 0 0 14px rgba(46,230,160,0);} }
+  .c1 { background:linear-gradient(135deg,#0070d1,#00a3ff); }
+  .c2 { background:linear-gradient(135deg,#7c5cff,#a06bff); }
+  .c3 { background:linear-gradient(135deg,#e0533a,#c0392b); }
+  .c4 { background:linear-gradient(135deg,#12b866,#0aa0a0); }
+  .c5 { background:linear-gradient(135deg,#ff9d3a,#ffd24a); color:#3a2400; }
+  .roast { background:linear-gradient(135deg,#e0533a,#ff6f3a); }
+
+  .tabs { display:flex; gap:6px; background:var(--card); border:1px solid var(--line);
+    padding:5px; border-radius:15px; margin:14px 0; backdrop-filter:blur(18px);
+    -webkit-backdrop-filter:blur(18px); }
+  .tab { flex:1; text-align:center; padding:10px; border-radius:11px; font-size:13.5px;
+    font-weight:700; color:var(--dim); cursor:pointer; border:none; background:none;
+    transition:background .15s,color .15s; }
+  .tab.on { background:linear-gradient(135deg,var(--psn),var(--accent)); color:#fff; }
+  .panel { display:none; } .panel.on { display:block; animation:fade .3s ease both; }
+  @keyframes fade { from { opacity:0; transform:translateY(6px); } }
+
+  .card { background:var(--card); border:1px solid var(--line); border-radius:18px;
+    padding:8px 16px; backdrop-filter:blur(18px); -webkit-backdrop-filter:blur(18px); }
+  .row { display:flex; align-items:center; gap:13px; padding:13px 4px;
+    border-bottom:1px solid rgba(255,255,255,.05); }
   .row:last-child { border-bottom:none; }
-  .av { width:46px; height:46px; border-radius:12px; background:#22304f; object-fit:cover;
-    flex:none; position:relative; }
   .avwrap { position:relative; flex:none; }
-  .gicon { position:absolute; right:-5px; bottom:-5px; width:24px; height:24px;
-    border-radius:7px; object-fit:cover; border:2px solid #141b31;
-    box-shadow:0 2px 6px rgba(0,0,0,.5); }
+  .av { width:50px; height:50px; border-radius:13px; background:#22304f; object-fit:cover; display:block; }
+  .gicon { position:absolute; right:-6px; bottom:-6px; width:26px; height:26px;
+    border-radius:8px; object-fit:cover; border:2px solid #0e1424; box-shadow:0 2px 8px rgba(0,0,0,.6); }
   .who { flex:1; min-width:0; }
-  .name { font-weight:600; font-size:15px; }
-  .mm { color:#6f7ea3; font-size:12px; }
-  .state { font-size:13px; color:#9aa7c4; margin-top:3px; white-space:nowrap;
-    overflow:hidden; text-overflow:ellipsis; }
-  .dot { display:inline-block; width:9px; height:9px; border-radius:50%; margin-right:6px;
-    vertical-align:middle; background:#4a5677; }
-  .on .dot { background:#2ecc71; box-shadow:0 0 8px #2ecc71; }
-  .on .name { color:#eafff2; }
-  /* actively in a game gets a brighter pulsing dot + green title */
-  .playing .dot { background:#2ee6a0; box-shadow:0 0 10px #2ee6a0;
-    animation:pulse 1.8s ease-in-out infinite; }
-  @keyframes pulse { 50% { box-shadow:0 0 3px #2ee6a0; opacity:.65; } }
-  .game-badge { color:#8ff0b6; font-weight:600; }
-  .game-badge b { color:#eafff2; font-weight:700; }
-  .empty { color:#7d8ab0; text-align:center; padding:26px 10px; font-size:14px; }
+  .name { font-weight:700; font-size:15px; display:flex; align-items:center; }
+  .mm { color:#6f7ea3; font-size:12px; font-weight:500; margin-left:6px; }
+  .state { font-size:12.5px; color:var(--dim); margin-top:3px;
+    overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+  .dot { width:9px; height:9px; border-radius:50%; margin-right:7px; flex:none;
+    background:#4a5677; display:inline-block; }
+  .on .dot { background:var(--ok); box-shadow:0 0 8px var(--ok); }
+  .playing .dot { background:var(--ok); box-shadow:0 0 11px var(--ok); animation:pulse 1.8s ease-in-out infinite; }
+  @keyframes pulse { 50% { box-shadow:0 0 3px var(--ok); opacity:.6; } }
+  .game-badge { color:#9dffd6; font-weight:600; } .game-badge b { color:#eafff2; }
+  .troph { display:flex; gap:9px; align-items:center; flex:none; }
+  .lvl { text-align:center; }
+  .lvl .v { font-size:17px; font-weight:800; line-height:1;
+    background:linear-gradient(135deg,var(--gold),#ff9d3a);
+    -webkit-background-clip:text; background-clip:text; color:transparent; }
+  .lvl .k { font-size:9px; color:var(--dim); letter-spacing:.5px; }
+  .tcount { font-size:11.5px; color:var(--dim); text-align:right; line-height:1.5; }
+  .tcount .p { color:#6fd0ff; font-weight:700; }
+
+  .lb-row { display:flex; align-items:center; gap:13px; padding:13px 4px;
+    border-bottom:1px solid rgba(255,255,255,.05); }
+  .lb-row:last-child { border-bottom:none; }
+  .rank { width:30px; text-align:center; font-size:17px; font-weight:800; color:var(--dim); flex:none; }
+  .bar { height:7px; border-radius:99px; background:rgba(255,255,255,.08); margin-top:6px; overflow:hidden; }
+  .bar > i { display:block; height:100%; background:linear-gradient(90deg,var(--psn2),var(--accent)); }
+
+  .empty { color:#7d8ab0; text-align:center; padding:30px 10px; font-size:14px; line-height:1.6; }
+  .spin { color:#7d8ab0; text-align:center; padding:26px; }
+  .link-cta { color:#7fb2ff; font-size:12.5px; text-decoration:none; }
   .toast { position:fixed; left:50%; bottom:22px; transform:translateX(-50%);
-    background:#1b2540; border:1px solid #33436b; color:#e9edf5;
-    padding:11px 18px; border-radius:12px; font-size:14px; opacity:0; pointer-events:none;
-    transition:opacity .2s; }
+    background:#1b2540; border:1px solid #33436b; color:#eaf0ff; padding:12px 20px;
+    border-radius:13px; font-size:14px; opacity:0; pointer-events:none; transition:opacity .2s;
+    z-index:50; box-shadow:0 12px 30px rgba(0,0,0,.5); }
   .toast.show { opacity:1; }
-  .foot { margin-top:22px; text-align:center; }
-  .foot a { color:#5a9bff; font-size:13px; text-decoration:none; }
-  .spin { color:#7d8ab0; text-align:center; padding:24px; }
 </style></head>
 <body><div class="wrap">
-  <header>
-    <h1>🎮 The Squad</h1>
-    <span class="sub" id="onlinecount"></span>
-  </header>
-  <p class="sub">Live PlayStation status · tap an action to rally everyone</p>
-
-  <div class="actions">
-    <button class="act squad" onclick="act('/v2/squad','Squad Up sent! 🎮')">🎮 Squad Up</button>
-    <button class="act game" onclick="act('/v2/send','Game Time sent! 🕹️','🎮🔥 Let\\'s party up y\\'all. It\\'s GAME TIME! 🕹️💥')">🕹️ Game Time</button>
-    <button class="act roast" onclick="act('/roast/once','Roast fired 🔥')">🔥 Roast Now</button>
-    <button class="act roaststop" onclick="act('/roast/stop','Roast bot stopped')">🛑 Stop Roast</button>
+  <div class="top">
+    <div class="logo">🎮</div>
+    <div><h1>The Squad</h1><p class="tag">Tap to blast the group · live PSN status</p></div>
+    <div class="live" id="livecount"></div>
   </div>
 
-  <div class="card" id="squad"><div class="spin">Loading squad…</div></div>
+  <div class="board-wrap">
+    <div class="board-title">🔊 Soundboard — tap to send</div>
+    <div class="board" id="board"></div>
+  </div>
 
-  <div class="foot"><a href="/portal">＋ Link a PlayStation account</a></div>
+  <div class="tabs">
+    <button class="tab on" data-p="squad" onclick="tab(this)">Squad</button>
+    <button class="tab" data-p="lb" onclick="tab(this)">🏆 Leaderboard</button>
+  </div>
+  <div class="panel on" id="p-squad"><div class="card" id="squad"><div class="spin">Loading squad…</div></div></div>
+  <div class="panel" id="p-lb"><div class="card" id="lb"><div class="spin">Loading leaderboard…</div></div></div>
+  <p style="text-align:center;margin-top:16px"><a class="link-cta" href="/portal">＋ Link your PlayStation account</a></p>
 </div>
 <div class="toast" id="toast"></div>
 <script>
-const toast = (m) => { const t=document.getElementById('toast'); t.textContent=m;
-  t.classList.add('show'); setTimeout(()=>t.classList.remove('show'),2200); };
+const SOUNDBOARD = __SOUNDBOARD__;
+const $ = id => document.getElementById(id);
+const esc = s => (s||'').replace(/[&<>"]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
+const toast = m => { const t=$('toast'); t.textContent=m; t.classList.add('show');
+  setTimeout(()=>t.classList.remove('show'),2000); };
 
-async function act(path, okMsg, message) {
+// Build the soundboard
+$('board').innerHTML = SOUNDBOARD.map((b,i)=>
+  '<button class="snd '+(b.cls||'c1')+'" data-i="'+i+'" onclick="fire(this)">'+esc(b.label)+'</button>'
+).join('');
+async function fire(el){
+  const b = SOUNDBOARD[el.dataset.i];
+  el.classList.add('flash'); setTimeout(()=>el.classList.remove('flash'),500);
   try {
-    const opts = { method:'POST' };
-    if (message) { opts.headers={'Content-Type':'application/json'};
-      opts.body=JSON.stringify({message}); }
-    const r = await fetch(path, opts);
-    toast(r.ok ? okMsg : 'Failed ('+r.status+')');
-  } catch(e) { toast('Network error'); }
+    let r;
+    if(b.path){ r = await fetch(b.path,{method:'POST'}); }
+    else { r = await fetch('/v2/squad',{method:'POST',headers:{'Content-Type':'application/json'},
+      body:JSON.stringify({message:b.msg})}); }
+    toast(r.ok ? 'Sent! 🎮' : 'Failed ('+r.status+')');
+  } catch(e){ toast('Network error'); }
 }
 
+function tab(btn){
+  document.querySelectorAll('.tab').forEach(t=>t.classList.remove('on'));
+  document.querySelectorAll('.panel').forEach(p=>p.classList.remove('on'));
+  btn.classList.add('on'); $('p-'+btn.dataset.p).classList.add('on');
+}
 function fmtLast(iso){ if(!iso) return 'offline';
-  const d=new Date(iso), now=new Date(), s=(now-d)/1000;
+  const s=(Date.now()-new Date(iso))/1000;
   if(s<3600) return Math.max(1,Math.floor(s/60))+'m ago';
   if(s<86400) return Math.floor(s/3600)+'h ago';
   return Math.floor(s/86400)+'d ago'; }
 
+let SQUAD=[];
+function trophyCells(m){
+  if(m.trophy_level==null) return '';
+  return '<div class="troph"><div class="lvl"><div class="v">'+m.trophy_level+'</div><div class="k">LVL</div></div>'+
+    '<div class="tcount"><span class="p">'+(m.platinum||0)+' ⚪</span><br>'+(m.gold||0)+' 🥇</div></div>';
+}
+function renderSquad(){
+  const el=$('squad');
+  if(!SQUAD.length){ el.innerHTML='<div class="empty">Nobody linked yet.<br>'+
+    '<a class="link-cta" href="/portal">Link your account</a> to show up here.</div>'; return; }
+  el.innerHTML = SQUAD.map(m=>{
+    const name=esc(m.online_id||m.mm_username||'Unknown');
+    const av=m.avatar||'';
+    const gi=(m.playing&&m.game_icon)?'<img class="gicon" src="'+esc(m.game_icon)+'">':'';
+    const avImg='<div class="avwrap">'+(av?'<img class="av" src="'+esc(av)+'">':'<div class="av"></div>')+gi+'</div>';
+    let st;
+    if(m.playing) st='<span class="game-badge">Playing <b>'+esc(m.game)+'</b></span>';
+    else if(m.online) st='Online'+(m.platform?' · '+esc(m.platform):'');
+    else if(m.recent_game) st='Last played '+esc(m.recent_game)+' · '+fmtLast(m.last_online);
+    else st='Last online '+fmtLast(m.last_online);
+    const mm=m.mm_username?'<span class="mm">@'+esc(m.mm_username)+'</span>':'';
+    const cls=m.playing?'on playing':(m.online?'on':'');
+    return '<div class="row '+cls+'">'+avImg+'<div class="who"><div class="name"><span class="dot"></span>'+name+mm+'</div>'+
+      '<div class="state">'+st+'</div></div>'+trophyCells(m)+'</div>';
+  }).join('');
+}
+function renderBoard(){
+  const el=$('lb');
+  const ranked=SQUAD.filter(m=>m.trophy_level!=null)
+    .sort((a,b)=>(b.trophy_level-a.trophy_level)||((b.platinum||0)-(a.platinum||0)));
+  if(!ranked.length){ el.innerHTML='<div class="empty">No trophy data yet.</div>'; return; }
+  const max=ranked[0].trophy_level||1;
+  el.innerHTML = ranked.map((m,i)=>{
+    const name=esc(m.online_id||m.mm_username||'Unknown'); const av=m.avatar||'';
+    const rk=i<3?['🥇','🥈','🥉'][i]:'#'+(i+1);
+    return '<div class="lb-row"><div class="rank">'+rk+'</div>'+
+      (av?'<img class="av" style="width:42px;height:42px" src="'+esc(av)+'">':'<div class="av" style="width:42px;height:42px"></div>')+
+      '<div class="who"><div class="name">'+name+'</div>'+
+      '<div class="state">Lvl '+m.trophy_level+' · '+(m.platinum||0)+' plat · '+(m.gold||0)+'🥇 '+(m.silver||0)+'🥈 '+(m.bronze||0)+'🥉</div>'+
+      '<div class="bar"><i style="width:'+Math.round((m.trophy_level/max)*100)+'%"></i></div></div></div>';
+  }).join('');
+}
 async function loadSquad(){
   try {
-    const r = await fetch('/api/squad'); const {squad=[]} = await r.json();
-    const el = document.getElementById('squad');
-    const playing = squad.filter(m=>m.playing).length;
-    const online = squad.filter(m=>m.online).length;
-    let count = '';
-    if(squad.length){
-      count = online+' / '+squad.length+' online';
-      if(playing) count = '🎮 '+playing+' in-game · '+count;
-    }
-    document.getElementById('onlinecount').textContent = count;
-    if(!squad.length){ el.innerHTML =
-      '<div class="empty">No one linked yet.<br>Share the link below to add the squad.</div>';
-      return; }
-    const esc = s => (s||'').replace(/[&<>"]/g, c =>
-      ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
-    el.innerHTML = squad.map(m=>{
-      const name = esc(m.online_id || m.mm_username || 'Unknown');
-      const av = m.avatar || '';
-      const gicon = (m.playing && m.game_icon)
-        ? '<img class="gicon" src="'+esc(m.game_icon)+'" alt="">' : '';
-      const avImg = '<div class="avwrap">'+
-        (av ? '<img class="av" src="'+esc(av)+'" alt="">' : '<div class="av"></div>')+
-        gicon+'</div>';
-      let state;
-      if(m.playing){ state = '<span class="game-badge">Playing <b>'+esc(m.game)+'</b></span>'; }
-      else if(m.online){ state = 'Online'+(m.platform?' · '+esc(m.platform):''); }
-      else state = 'Last online '+fmtLast(m.last_online);
-      const mm = m.mm_username ? '<span class="mm"> @'+esc(m.mm_username)+'</span>' : '';
-      const cls = m.playing ? 'on playing' : (m.online ? 'on' : '');
-      return '<div class="row '+cls+'">'+avImg+
-        '<div class="who"><div class="name"><span class="dot"></span>'+name+mm+'</div>'+
-        '<div class="state">'+state+'</div></div></div>';
-    }).join('');
-  } catch(e){
-    document.getElementById('squad').innerHTML =
-      '<div class="empty">Couldn\\'t load squad status.</div>';
-  }
+    const {squad=[]}=await (await fetch('/api/squad')).json();
+    SQUAD=squad;
+    const playing=squad.filter(m=>m.playing).length, online=squad.filter(m=>m.online).length;
+    $('livecount').innerHTML = squad.length ? ('<b>'+online+'</b> online'+(playing?' · '+playing+' 🎮':'')) : '';
+    renderSquad(); renderBoard();
+  } catch(e){ $('squad').innerHTML='<div class="empty">Couldn\'t load squad.</div>'; }
 }
-loadSquad();
-setInterval(loadSquad, 30000);  // refresh every 30s
+loadSquad(); setInterval(loadSquad, 30000);
 </script>
 </body></html>"""
