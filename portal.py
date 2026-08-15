@@ -271,7 +271,7 @@ def mattermost_usernames() -> list[str]:
     if not (base and token and team):
         return []
     # Bots we don't want in the human picker.
-    skip = {"slapper", "slaptastic", "themoosecompany"}
+    skip = {"slapper", "slaptastic"}
     headers = {"Authorization": f"Bearer {token}"}
     try:
         with httpx.Client(timeout=15) as client:

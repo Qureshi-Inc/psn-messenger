@@ -38,7 +38,12 @@ def _headers(access_token: str) -> dict[str, str]:
 
 
 def linked_accounts() -> list[dict]:
-    """The people who linked via the portal (mm_username + PSN ids)."""
+    """The people who linked via the portal (mm_username + PSN ids).
+
+    Includes the on-disk file path so we can mint that user's OWN access token
+    for their presence lookup -- a self-query is authoritative and not subject
+    to the bot's friend-visibility/privacy settings.
+    """
     out: list[dict] = []
     if not USERS_DIR.exists():
         return out
@@ -53,16 +58,96 @@ def linked_accounts() -> list[dict]:
                     "mm_username": d.get("mm_username"),
                     "online_id": d.get("online_id"),
                     "account_id": str(d.get("account_id")),
+                    "_file": str(f),
                 }
             )
     return out
 
 
-def _presence(client: httpx.Client, token: str, account_id: str) -> dict:
-    """Online status + current game for one account."""
+def _user_token(account: dict) -> str | None:
+    """Fresh access token for a linked user, using their stored refresh/NPSSO.
+
+    Refreshes in-place and persists the rotated tokens so the file stays valid.
+    Returns None if the user can't be re-authed (they'd need to re-link).
+    """
+    path = account.get("_file")
+    if not path:
+        return None
+    try:
+        d = json.loads(Path(path).read_text())
+    except Exception:  # noqa: BLE001
+        return None
+
+    import time
+
+    # Reuse a still-valid access token.
+    if d.get("access_token") and time.time() < d.get("expires_at", 0) - 300:
+        return d["access_token"]
+
+    # Otherwise refresh (preferred) or fall back to the stored NPSSO.
+    from portal import _exchange_npsso  # local import avoids a cycle at import time
+
+    tok_data = None
+    refresh = d.get("refresh_token")
+    if refresh and time.time() < d.get("refresh_expires_at", 0):
+        try:
+            import httpx as _httpx
+
+            from psn_auth import AUTH_HEADER, SCOPE, TOKEN_URL
+
+            with _httpx.Client(timeout=15) as c:
+                r = c.post(
+                    TOKEN_URL,
+                    data={
+                        "grant_type": "refresh_token",
+                        "refresh_token": refresh,
+                        "scope": SCOPE,
+                        "token_format": "jwt",
+                    },
+                    headers={
+                        "Content-Type": "application/x-www-form-urlencoded",
+                        "Authorization": AUTH_HEADER,
+                    },
+                )
+            if r.status_code == 200:
+                tok_data = r.json()
+        except Exception as exc:  # noqa: BLE001
+            logger.debug("user token refresh failed for %s: %s", d.get("online_id"), exc)
+
+    if tok_data is None and d.get("npsso"):
+        try:
+            tok_data = _exchange_npsso(d["npsso"])
+        except Exception as exc:  # noqa: BLE001
+            logger.debug("user npsso re-exchange failed for %s: %s", d.get("online_id"), exc)
+            return None
+
+    if not tok_data:
+        return None
+
+    # Persist rotated tokens so the file keeps working.
+    now = time.time()
+    d["access_token"] = tok_data["access_token"]
+    d["refresh_token"] = tok_data.get("refresh_token", refresh)
+    d["expires_at"] = now + tok_data.get("expires_in", 3600)
+    d["refresh_expires_at"] = now + tok_data.get("refresh_token_expires_in", 7776000)
+    try:
+        Path(path).write_text(json.dumps(d, indent=2))
+    except Exception:  # noqa: BLE001
+        pass
+    return d["access_token"]
+
+
+def _presence(client: httpx.Client, token: str, account_id: str, own: bool = False) -> dict:
+    """Online status + current game for one account.
+
+    When ``own`` is True the token belongs to this account, so we query the
+    self endpoint (``/me``) -- authoritative and immune to friend-visibility
+    settings. Otherwise we look the account up by id with the bot's token.
+    """
+    who = "me" if own else account_id
     try:
         r = client.get(
-            f"{API}/{account_id}/basicPresences",
+            f"{API}/{who}/basicPresences",
             params={"type": "primary"},
             headers=_headers(token),
             timeout=15,
@@ -120,20 +205,32 @@ def _avatar(client: httpx.Client, token: str, online_id: str) -> str | None:
 
 
 def squad_status(auth) -> list[dict]:
-    """Full presence + avatar for every linked account. `auth` is a PSNAuth."""
+    """Full presence + avatar for every linked account. `auth` is a PSNAuth.
+
+    Prefers each user's OWN token for their presence (self-query, authoritative
+    and privacy-proof); falls back to the bot's token by account id if a user's
+    token can't be refreshed.
+    """
     accounts = linked_accounts()
     if not accounts:
         return []
-    token = auth.access_token
+    bot_token = auth.access_token
     out: list[dict] = []
     with httpx.Client() as client:
         for a in accounts:
-            pres = _presence(client, token, a["account_id"])
+            utok = _user_token(a)
+            if utok:
+                pres = _presence(client, utok, a["account_id"], own=True)
+            else:
+                # No usable user token -> look them up with the bot's token.
+                pres = _presence(client, bot_token, a["account_id"])
+            # Avatars are public; the bot's token is fine and avoids extra work.
+            entry = {k: v for k, v in a.items() if not k.startswith("_")}
             out.append(
                 {
-                    **a,
+                    **entry,
                     **pres,
-                    "avatar": _avatar(client, token, a.get("online_id")),
+                    "avatar": _avatar(client, bot_token, a.get("online_id")),
                 }
             )
     # Sort: in-game first, then online-on-menus, then offline; then by name.
