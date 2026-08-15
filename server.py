@@ -1008,6 +1008,13 @@ _DASHBOARD_TMPL = r"""<!doctype html>
   .snd:hover { filter:brightness(1.12); }
   .snd.flash { animation:flash .5s ease; }
   @keyframes flash { 0%{ box-shadow:0 0 0 0 rgba(46,230,160,.7);} 100%{ box-shadow:0 0 0 14px rgba(46,230,160,0);} }
+  /* long-press-to-delete feedback on custom buttons */
+  .snd.custom { position:relative; }
+  .snd.custom::after { content:"✕"; position:absolute; top:3px; right:6px; font-size:10px;
+    opacity:.45; }
+  .snd.holding { animation:holdpulse .6s ease forwards; }
+  @keyframes holdpulse { to { transform:scale(.86); filter:brightness(.7) saturate(1.4);
+    box-shadow:0 0 0 3px rgba(255,90,120,.6) inset; } }
   .c1 { background:linear-gradient(135deg,#0070d1,#00a3ff); }
   .c2 { background:linear-gradient(135deg,#7c5cff,#a06bff); }
   .c3 { background:linear-gradient(135deg,#e0533a,#c0392b); }
@@ -1112,11 +1119,28 @@ const toast = m => { const t=$('toast'); t.textContent=m; t.classList.add('show'
 let BUTTONS = SOUNDBOARD.slice();
 function renderButtons(){
   $('board').innerHTML = BUTTONS.map((b,i)=>
-    '<button class="snd '+(b.cls||'c1')+'" data-i="'+i+'" onclick="fire(this)"'+
-    (b.custom?' oncontextmenu="return delBtn(event,'+i+')"':'')+'>'+esc(b.label)+'</button>'
+    '<button class="snd '+(b.cls||'c1')+(b.custom?' custom':'')+'" data-i="'+i+'" '+
+    'onclick="fire(this)">'+esc(b.label)+'</button>'
   ).join('') +
     '<button class="snd add" onclick="openCustom()">＋ Custom</button>';
+  bindLongPress();
   syncBoardHeight();
+}
+// Press-and-hold (600ms) on a CUSTOM button to delete it. Works on touch and
+// mouse; the hold cancels the normal click so it doesn't also fire the message.
+let _lpTimer=null, _lpFired=false;
+function bindLongPress(){
+  document.querySelectorAll('.snd.custom').forEach(el=>{
+    const i=el.dataset.i;
+    const start=(ev)=>{ _lpFired=false; el.classList.add('holding');
+      _lpTimer=setTimeout(()=>{ _lpFired=true; el.classList.remove('holding');
+        if(navigator.vibrate) navigator.vibrate(30); delBtn(ev,i); },600); };
+    const cancel=()=>{ clearTimeout(_lpTimer); el.classList.remove('holding'); };
+    el.addEventListener('touchstart',start,{passive:true});
+    el.addEventListener('touchend',cancel); el.addEventListener('touchmove',cancel);
+    el.addEventListener('mousedown',start);
+    el.addEventListener('mouseup',cancel); el.addEventListener('mouseleave',cancel);
+  });
 }
 // Keep the page's bottom padding == the fixed soundboard's real height so the
 // squad list is never hidden behind it (fixes the "users cut off / can't scroll").
@@ -1134,6 +1158,7 @@ if(localStorage.getItem('sb_collapsed')==='1') $('boardWrap').classList.add('col
 window.addEventListener('resize', syncBoardHeight);
 renderButtons();
 async function fire(el){
+  if(_lpFired){ _lpFired=false; return; }  // a long-press just deleted; don't send
   const b = BUTTONS[el.dataset.i];
   el.classList.add('flash'); setTimeout(()=>el.classList.remove('flash'),500);
   try {
@@ -1173,7 +1198,7 @@ async function openCustom(){
   } catch(e){ toast('Network error'); }
 }
 async function delBtn(ev, i){
-  ev.preventDefault();
+  if(ev && ev.preventDefault) ev.preventDefault();
   const b = BUTTONS[i];
   if(!b || !b.custom) return false;
   if(!confirm('Remove this custom button?\n\n'+b.msg)) return false;
