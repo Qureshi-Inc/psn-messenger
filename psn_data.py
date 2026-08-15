@@ -72,14 +72,24 @@ def _presence(client: httpx.Client, token: str, account_id: str) -> dict:
         bp = r.json().get("basicPresence", {})
         plat = bp.get("primaryPlatformInfo", {})
         status = plat.get("onlineStatus", "offline")
-        # gameTitleInfoList appears only while actively in a game.
+        online = status == "online"
+        # gameTitleInfoList appears only while actively in a game; it carries the
+        # title name and the game's cover art (conceptIconUrl / npTitleIconUrl).
         games = bp.get("gameTitleInfoList") or []
-        game = games[0].get("titleName") if games else None
+        game = game_icon = None
+        if games:
+            g = games[0]
+            game = g.get("titleName")
+            game_icon = g.get("conceptIconUrl") or g.get("npTitleIconUrl")
+            if game_icon:
+                game_icon = game_icon.replace("http://", "https://")
         return {
-            "online": status == "online",
+            "online": online,
             "status": status,
+            "playing": bool(game),  # actively in a game (vs. just online on menus)
             "platform": plat.get("platform"),
             "game": game,
+            "game_icon": game_icon,
             "last_online": plat.get("lastOnlineDate"),
         }
     except Exception as exc:  # noqa: BLE001
@@ -126,6 +136,12 @@ def squad_status(auth) -> list[dict]:
                     "avatar": _avatar(client, token, a.get("online_id")),
                 }
             )
-    # Online first, then by name.
-    out.sort(key=lambda x: (not x.get("online"), (x.get("online_id") or "").lower()))
+    # Sort: in-game first, then online-on-menus, then offline; then by name.
+    out.sort(
+        key=lambda x: (
+            not x.get("playing"),
+            not x.get("online"),
+            (x.get("online_id") or "").lower(),
+        )
+    )
     return out

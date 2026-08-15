@@ -737,17 +737,26 @@ _DASHBOARD_HTML = """<!doctype html>
     border-bottom:1px solid #202b45; }
   .row:last-child { border-bottom:none; }
   .av { width:46px; height:46px; border-radius:12px; background:#22304f; object-fit:cover;
-    flex:none; }
+    flex:none; position:relative; }
+  .avwrap { position:relative; flex:none; }
+  .gicon { position:absolute; right:-5px; bottom:-5px; width:24px; height:24px;
+    border-radius:7px; object-fit:cover; border:2px solid #141b31;
+    box-shadow:0 2px 6px rgba(0,0,0,.5); }
   .who { flex:1; min-width:0; }
   .name { font-weight:600; font-size:15px; }
   .mm { color:#6f7ea3; font-size:12px; }
-  .state { font-size:13px; color:#9aa7c4; margin-top:2px; white-space:nowrap;
+  .state { font-size:13px; color:#9aa7c4; margin-top:3px; white-space:nowrap;
     overflow:hidden; text-overflow:ellipsis; }
   .dot { display:inline-block; width:9px; height:9px; border-radius:50%; margin-right:6px;
     vertical-align:middle; background:#4a5677; }
   .on .dot { background:#2ecc71; box-shadow:0 0 8px #2ecc71; }
   .on .name { color:#eafff2; }
-  .game-badge { color:#8ff0b6; }
+  /* actively in a game gets a brighter pulsing dot + green title */
+  .playing .dot { background:#2ee6a0; box-shadow:0 0 10px #2ee6a0;
+    animation:pulse 1.8s ease-in-out infinite; }
+  @keyframes pulse { 50% { box-shadow:0 0 3px #2ee6a0; opacity:.65; } }
+  .game-badge { color:#8ff0b6; font-weight:600; }
+  .game-badge b { color:#eafff2; font-weight:700; }
   .empty { color:#7d8ab0; text-align:center; padding:26px 10px; font-size:14px; }
   .toast { position:fixed; left:50%; bottom:22px; transform:translateX(-50%);
     background:#1b2540; border:1px solid #33436b; color:#e9edf5;
@@ -801,23 +810,34 @@ async function loadSquad(){
   try {
     const r = await fetch('/api/squad'); const {squad=[]} = await r.json();
     const el = document.getElementById('squad');
+    const playing = squad.filter(m=>m.playing).length;
     const online = squad.filter(m=>m.online).length;
-    document.getElementById('onlinecount').textContent =
-      squad.length ? (online+' / '+squad.length+' online') : '';
+    let count = '';
+    if(squad.length){
+      count = online+' / '+squad.length+' online';
+      if(playing) count = '🎮 '+playing+' in-game · '+count;
+    }
+    document.getElementById('onlinecount').textContent = count;
     if(!squad.length){ el.innerHTML =
       '<div class="empty">No one linked yet.<br>Share the link below to add the squad.</div>';
       return; }
+    const esc = s => (s||'').replace(/[&<>"]/g, c =>
+      ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
     el.innerHTML = squad.map(m=>{
-      const name = m.online_id || m.mm_username || 'Unknown';
+      const name = esc(m.online_id || m.mm_username || 'Unknown');
       const av = m.avatar || '';
-      const avImg = av ? '<img class="av" src="'+av+'" alt="">' : '<div class="av"></div>';
+      const gicon = (m.playing && m.game_icon)
+        ? '<img class="gicon" src="'+esc(m.game_icon)+'" alt="">' : '';
+      const avImg = '<div class="avwrap">'+
+        (av ? '<img class="av" src="'+esc(av)+'" alt="">' : '<div class="av"></div>')+
+        gicon+'</div>';
       let state;
-      if(m.online){ state = m.game
-        ? '<span class="game-badge">Playing '+m.game+'</span>'
-        : 'Online'+(m.platform?' · '+m.platform:''); }
+      if(m.playing){ state = '<span class="game-badge">Playing <b>'+esc(m.game)+'</b></span>'; }
+      else if(m.online){ state = 'Online'+(m.platform?' · '+esc(m.platform):''); }
       else state = 'Last online '+fmtLast(m.last_online);
-      const mm = m.mm_username ? '<span class="mm"> @'+m.mm_username+'</span>' : '';
-      return '<div class="row '+(m.online?'on':'')+'">'+avImg+
+      const mm = m.mm_username ? '<span class="mm"> @'+esc(m.mm_username)+'</span>' : '';
+      const cls = m.playing ? 'on playing' : (m.online ? 'on' : '');
+      return '<div class="row '+cls+'">'+avImg+
         '<div class="who"><div class="name"><span class="dot"></span>'+name+mm+'</div>'+
         '<div class="state">'+state+'</div></div></div>';
     }).join('');
