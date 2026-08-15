@@ -247,8 +247,19 @@ def _trophy_summary(client: httpx.Client, token: str, account_id: str, own: bool
         return {}
 
 
+# If a title was last played within this window we treat the person as actively
+# playing it -- the presence API lags/hides console state, but the game list's
+# lastPlayedDateTime updates in real time (verified: shows the current game with
+# a "seconds ago" timestamp even when presence says offline).
+RECENT_PLAY_WINDOW_SEC = 15 * 60
+
+
 def _recent_game(client: httpx.Client, token: str) -> dict:
-    """Most recently played title (self-token only) with its art."""
+    """Most recently played title (self-token only) with art + freshness.
+
+    Returns recent_game/icon plus recent_played_at and recent_active (True if
+    the last-played time is within RECENT_PLAY_WINDOW_SEC -> currently playing).
+    """
     try:
         r = client.get(
             f"{GAMELIST}/users/me/titles",
@@ -263,7 +274,23 @@ def _recent_game(client: httpx.Client, token: str) -> dict:
             return {}
         t = titles[0]
         img = (t.get("imageUrl") or "").replace("http://", "https://")
-        return {"recent_game": t.get("name"), "recent_game_icon": img}
+        last = t.get("lastPlayedDateTime")
+        active = False
+        if last:
+            try:
+                from datetime import datetime, timezone
+
+                dt = datetime.fromisoformat(last.replace("Z", "+00:00"))
+                age = (datetime.now(timezone.utc) - dt).total_seconds()
+                active = 0 <= age <= RECENT_PLAY_WINDOW_SEC
+            except Exception:  # noqa: BLE001
+                pass
+        return {
+            "recent_game": t.get("name"),
+            "recent_game_icon": img,
+            "recent_played_at": last,
+            "recent_active": active,
+        }
     except Exception:  # noqa: BLE001
         return {}
 
@@ -321,6 +348,15 @@ def _squad_status_uncached(auth, include_stats: bool = True) -> list[dict]:
                 entry.update(_trophy_summary(client, tok, a["account_id"], own))
                 if own:
                     entry.update(_recent_game(client, tok))
+            # The presence API often reports "offline" even while someone is in
+            # a game (esp. cross-play titles). The game list's lastPlayedDateTime
+            # is real-time, so if they played within the recent window we treat
+            # them as online + playing that title.
+            if entry.get("recent_active") and not entry.get("playing"):
+                entry["online"] = True
+                entry["playing"] = True
+                entry["game"] = entry.get("game") or entry.get("recent_game")
+                entry["game_icon"] = entry.get("game_icon") or entry.get("recent_game_icon")
             out.append(entry)
     # Sort: in-game first, then online-on-menus, then offline; then by name.
     out.sort(

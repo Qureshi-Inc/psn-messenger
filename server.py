@@ -876,7 +876,9 @@ _DASHBOARD_TMPL = r"""<!doctype html>
   html,body { margin:0; }
   body { font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif;
     color:var(--txt); min-height:100dvh; background:var(--bg);
-    padding:0 0 240px; position:relative; overflow-x:hidden; }
+    /* bottom padding is set dynamically in JS to exactly clear the fixed
+       soundboard bar (var updated on load/resize/board change). */
+    padding:0 0 var(--board-h, 220px); position:relative; overflow-x:hidden; }
   body::before,body::after { content:""; position:fixed; inset:-30% -10%; z-index:-2;
     background:
       radial-gradient(42% 42% at 20% 14%, rgba(0,112,209,.4), transparent 60%),
@@ -907,7 +909,7 @@ _DASHBOARD_TMPL = r"""<!doctype html>
   .board-title { font-size:11px; letter-spacing:1.5px; color:var(--dim);
     text-transform:uppercase; margin:0 4px 8px; font-weight:700; }
   .board { display:grid; grid-template-columns:repeat(3,1fr); gap:8px;
-    max-height:34vh; overflow-y:auto; }
+    max-height:30vh; overflow-y:auto; -webkit-overflow-scrolling:touch; }
   /* ad-hoc quick-send row -- for one-off messages so people don't make buttons */
   .quick { display:flex; gap:8px; margin-top:10px; }
   .quick input { flex:1; padding:13px 15px; border-radius:13px; font-size:15px;
@@ -1034,7 +1036,15 @@ function renderButtons(){
     (b.custom?' oncontextmenu="return delBtn(event,'+i+')"':'')+'>'+esc(b.label)+'</button>'
   ).join('') +
     '<button class="snd add" onclick="openCustom()">＋ Custom</button>';
+  syncBoardHeight();
 }
+// Keep the page's bottom padding == the fixed soundboard's real height so the
+// squad list is never hidden behind it (fixes the "users cut off / can't scroll").
+function syncBoardHeight(){
+  const bar = document.querySelector('.board-wrap');
+  if(bar) document.body.style.setProperty('--board-h', (bar.offsetHeight + 16) + 'px');
+}
+window.addEventListener('resize', syncBoardHeight);
 renderButtons();
 async function fire(el){
   const b = BUTTONS[el.dataset.i];
