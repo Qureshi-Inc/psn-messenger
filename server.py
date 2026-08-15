@@ -1,6 +1,7 @@
 import os
 import logging
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, HTTPException, Form
+from fastapi.responses import HTMLResponse, RedirectResponse, JSONResponse
 from pydantic import BaseModel
 from psnawp_api import PSNAWP
 
@@ -12,6 +13,9 @@ GROUP_ID = os.environ.get("GROUP_ID")
 # Auto-Squad: a separate PSN group (everyone except wolfie/IG_Juicy) that the
 # "Squad Up" Stream Deck button rallies. Created 2026-08-15; overridable via env.
 SQUAD_GROUP_ID = os.environ.get("SQUAD_GROUP_ID", "213250d833ccce334b651e2ee15e365c97468e02-869")
+# Self-service linking portal: shared passcode friends type before the form
+# shows (keeps randos who find the URL out). Set PORTAL_PASSCODE in the env.
+PORTAL_PASSCODE = os.environ.get("PORTAL_PASSCODE", "")
 
 if not NPSSO_TOKEN:
     raise RuntimeError("NPSSO_TOKEN environment variable is required")
@@ -188,3 +192,127 @@ async def roast_once():
 @app.get("/roast/status")
 def roast_status():
     return {"running": roast_bot.is_running()}
+
+
+# === Self-service PSN linking portal ===
+#
+# Flow for a friend (one time, then never again):
+#   1. Open /portal, enter the shared passcode.
+#   2. Tap "Sign in to PlayStation" -> Sony login page (new tab).
+#   3. Tap "Get my token" -> Sony's ssocookie page shows {"npsso":"..."}.
+#   4. Copy it, paste back here, Link. We validate + save their tokens per
+#      user and auto-refresh forever after (see portal.py / psn_auth.py).
+
+import portal as portal_mod
+
+
+def _portal_page(error: str = "", ok: str = "") -> str:
+    """Render the single-page portal. Passcode gate is enforced server-side on
+    submit; the gate field simply travels with the form."""
+    from portal import NPSSO_TOKEN_URL, PSN_LOGIN_URL
+
+    banner = ""
+    if ok:
+        banner = f'<div class="msg ok">✅ {ok}</div>'
+    elif error:
+        banner = f'<div class="msg err">⚠️ {error}</div>'
+    passcode_field = (
+        '<label>Passcode<input name="passcode" type="password" '
+        'autocomplete="off" placeholder="ask the host" required></label>'
+        if PORTAL_PASSCODE
+        else ""
+    )
+    return f"""<!doctype html>
+<html lang="en"><head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Link your PlayStation</title>
+<style>
+  :root {{ color-scheme: dark; }}
+  * {{ box-sizing: border-box; }}
+  body {{ margin:0; font-family: -apple-system, system-ui, Segoe UI, Roboto, sans-serif;
+    background:#0b1020; color:#e9edf5; display:flex; min-height:100vh;
+    align-items:center; justify-content:center; padding:20px; }}
+  .card {{ width:100%; max-width:440px; background:#141b31; border:1px solid #26324f;
+    border-radius:16px; padding:26px; box-shadow:0 12px 40px rgba(0,0,0,.4); }}
+  h1 {{ font-size:20px; margin:0 0 4px; }}
+  p.sub {{ margin:0 0 20px; color:#9aa7c4; font-size:13px; line-height:1.5; }}
+  ol {{ padding-left:18px; margin:0 0 18px; color:#c3ccdf; font-size:13px; line-height:1.7; }}
+  a.btn, button {{ display:block; width:100%; text-align:center; text-decoration:none;
+    padding:13px; border-radius:11px; font-size:15px; font-weight:600; border:none;
+    cursor:pointer; margin-bottom:10px; }}
+  a.psn {{ background:#0070d1; color:#fff; }}
+  a.token {{ background:#1c2947; color:#cfe0ff; border:1px solid #2f4570; }}
+  label {{ display:block; font-size:12px; color:#9aa7c4; margin:14px 0 6px; }}
+  input, textarea {{ width:100%; padding:11px; border-radius:10px; border:1px solid #2c3a5c;
+    background:#0e1526; color:#e9edf5; font-size:14px; }}
+  textarea {{ min-height:70px; resize:vertical; font-family:ui-monospace,monospace; }}
+  button.link {{ background:#22c55e; color:#04210f; margin-top:14px; }}
+  button.paste {{ background:#2b3a5e; color:#cfe0ff; }}
+  .msg {{ padding:11px; border-radius:10px; font-size:13px; margin-bottom:16px; }}
+  .msg.ok {{ background:#0d3320; border:1px solid #1c6b3f; color:#8ff0b6; }}
+  .msg.err {{ background:#3a1420; border:1px solid #7a2740; color:#ffb0c0; }}
+  .hint {{ font-size:11px; color:#6f7ea3; margin-top:4px; }}
+</style></head>
+<body><div class="card">
+  <h1>🎮 Link your PlayStation</h1>
+  <p class="sub">Connect your PSN account once. After this you never have to
+    come back &mdash; it stays linked automatically.</p>
+  {banner}
+  <ol>
+    <li>Sign in to PlayStation.</li>
+    <li>Open the token page &mdash; you'll see <code>{{"npsso":"..."}}</code>.</li>
+    <li>Copy it, paste below, tap <b>Link</b>.</li>
+  </ol>
+  <a class="btn psn" href="{PSN_LOGIN_URL}" target="_blank" rel="noopener">1 · Sign in to PlayStation</a>
+  <a class="btn token" href="{NPSSO_TOKEN_URL}" target="_blank" rel="noopener">2 · Get my token</a>
+  <form method="post" action="/portal/link" id="f">
+    {passcode_field}
+    <label>3 · Paste your token here</label>
+    <textarea name="npsso" id="npsso" placeholder='{{"npsso":"..."}} or just the value' required></textarea>
+    <div class="hint">Tip: paste the whole <code>{{"npsso":"..."}}</code> line — we'll sort it out.</div>
+    <button type="button" class="paste" onclick="pasteToken()">📋 Paste from clipboard</button>
+    <button type="submit" class="link">🔗 Link my account</button>
+  </form>
+  <script>
+    async function pasteToken() {{
+      try {{
+        const t = await navigator.clipboard.readText();
+        if (t) document.getElementById('npsso').value = t.trim();
+      }} catch (e) {{ /* clipboard blocked; user pastes manually */ }}
+    }}
+  </script>
+</div></body></html>"""
+
+
+@app.get("/portal", response_class=HTMLResponse)
+def portal_home():
+    return _portal_page()
+
+
+@app.post("/portal/link", response_class=HTMLResponse)
+def portal_link(npsso: str = Form(...), passcode: str = Form("")):
+    if PORTAL_PASSCODE and passcode != PORTAL_PASSCODE:
+        return HTMLResponse(_portal_page(error="Wrong passcode."), status_code=403)
+    try:
+        result = portal_mod.link_user(npsso)
+    except portal_mod.LinkError as e:
+        return HTMLResponse(_portal_page(error=str(e)), status_code=400)
+    except Exception as e:  # noqa: BLE001
+        logger.error("portal: link failed: %s", e)
+        return HTMLResponse(
+            _portal_page(error="Something went wrong. Try a fresh token."),
+            status_code=500,
+        )
+    who = result.get("online_id") or "your account"
+    return HTMLResponse(
+        _portal_page(ok=f"{who} is linked! You're all set — nothing else to do.")
+    )
+
+
+@app.get("/portal/users")
+def portal_users(key: str = ""):
+    """Admin: list linked users (no secrets). Gated by the same passcode."""
+    if PORTAL_PASSCODE and key != PORTAL_PASSCODE:
+        raise HTTPException(status_code=403, detail="forbidden")
+    return {"users": portal_mod.list_users()}
