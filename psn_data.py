@@ -10,6 +10,8 @@ from __future__ import annotations
 
 import json
 import logging
+import threading
+import time
 from pathlib import Path
 
 import httpx
@@ -17,6 +19,15 @@ import httpx
 logger = logging.getLogger(__name__)
 
 USERS_DIR = Path("/data/users")
+
+# --- PSN call protection -----------------------------------------------------
+# Friends' accounts must never see a brute-force pattern. We serve squad_status
+# from a shared cache so that no matter how many people/tabs open the dashboard
+# (each polling every 30s), PSN is queried at most once per CACHE_TTL. A lock
+# ensures concurrent viewers coalesce onto a single refresh instead of stampeding.
+CACHE_TTL = 60.0  # seconds; one real PSN sweep per minute, max
+_cache: dict = {"at": 0.0, "data": None}
+_cache_lock = threading.Lock()
 
 API = "https://m.np.playstation.com/api/userProfile/v1/internal/users"
 PROFILE2 = "https://us-prof.np.community.playstation.net/userProfile/v1/users"
@@ -258,6 +269,30 @@ def _recent_game(client: httpx.Client, token: str) -> dict:
 
 
 def squad_status(auth, include_stats: bool = True) -> list[dict]:
+    """Cached wrapper around the PSN sweep -- see module-level cache notes.
+
+    Returns cached data if it's younger than CACHE_TTL. Under the lock, a second
+    check prevents a thundering herd from all triggering refreshes at once. If a
+    refresh errors, we keep serving the last good data rather than hammering PSN.
+    """
+    now = time.time()
+    if _cache["data"] is not None and (now - _cache["at"]) < CACHE_TTL:
+        return _cache["data"]
+    with _cache_lock:
+        now = time.time()
+        if _cache["data"] is not None and (now - _cache["at"]) < CACHE_TTL:
+            return _cache["data"]
+        try:
+            data = _squad_status_uncached(auth, include_stats)
+            _cache["data"] = data
+            _cache["at"] = time.time()
+            return data
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("squad refresh failed; serving stale: %s", exc)
+            return _cache["data"] or []
+
+
+def _squad_status_uncached(auth, include_stats: bool = True) -> list[dict]:
     """Full presence (+ optional trophy stats) for every linked account.
 
     Prefers each user's OWN token for presence/stats (self-query, authoritative

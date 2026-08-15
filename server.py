@@ -1,4 +1,5 @@
 import os
+import json
 import logging
 from fastapi import FastAPI, HTTPException, Form, Request
 from fastapi.responses import HTMLResponse, RedirectResponse, JSONResponse
@@ -30,6 +31,45 @@ group = psnawp.group(group_id=GROUP_ID)
 logger.info(f"Connected to group: {GROUP_ID}")
 
 app = FastAPI(title="PSN Messenger")
+
+
+# --- Rate limiting -----------------------------------------------------------
+# Protects friends' PSN accounts from any brute-force/spam pattern. Every action
+# that results in a PSN write (group messages, roasts) passes through a shared
+# token-bucket-ish window limiter keyed by action group. Well under anything
+# Sony would flag, and it stops a mashed button or a script from flooding.
+import threading as _threading
+import time as _time
+
+_rl_lock = _threading.Lock()
+_rl_hits: dict[str, list[float]] = {}
+
+# key -> (max_calls, per_seconds)
+_RL_LIMITS = {
+    "psn_send": (8, 60.0),      # group messages (soundboard, squad, /v2/send)
+    "roast": (5, 60.0),         # roast triggers
+    "custom_add": (6, 60.0),    # AI-flavored custom button creation (also Bedrock cost)
+}
+
+
+def _rate_limit(key: str) -> None:
+    """Raise HTTP 429 if `key` exceeded its window. Sliding-window counter."""
+    limit = _RL_LIMITS.get(key)
+    if not limit:
+        return
+    max_calls, window = limit
+    now = _time.time()
+    with _rl_lock:
+        hits = [t for t in _rl_hits.get(key, []) if now - t < window]
+        if len(hits) >= max_calls:
+            retry = round(window - (now - hits[0]), 1)
+            raise HTTPException(
+                status_code=429,
+                detail=f"Slow down — try again in {retry}s.",
+                headers={"Retry-After": str(int(retry) + 1)},
+            )
+        hits.append(now)
+        _rl_hits[key] = hits
 
 
 class MessageRequest(BaseModel):
@@ -95,6 +135,7 @@ def v2_health():
 
 @app.post("/v2/send")
 def v2_send_message(req: MessageRequest):
+    _rate_limit("psn_send")
     if not _v2_available:
         raise HTTPException(status_code=503, detail="v2 auth not initialized")
     if not req.message.strip():
@@ -140,6 +181,7 @@ class SquadRequest(BaseModel):
 @app.post("/v2/squad")
 def v2_squad(req: SquadRequest | None = None):
     """Post a 'squad up' rally message to the dedicated squad group."""
+    _rate_limit("psn_send")
     if _squad_messenger is None:
         raise HTTPException(status_code=503, detail="squad messenger not initialized")
     text = (req.message.strip() if (req and req.message) else "") or \
@@ -180,6 +222,7 @@ async def roast_stop():
 @app.post("/roast/once")
 async def roast_once():
     """Send one roast immediately."""
+    _rate_limit("roast")
     try:
         roast = roast_bot.generate_single_roast()
         roast_bot.send_roast(roast)
@@ -703,6 +746,66 @@ def api_squad():
         return JSONResponse({"squad": [], "error": str(e)}, status_code=500)
 
 
+class CustomButtonRequest(BaseModel):
+    text: str
+    send: bool = True  # also fire it to the group immediately
+
+
+@app.get("/api/soundboard")
+def api_soundboard():
+    """Current soundboard (built-ins + custom), for live refresh after adds."""
+    return {"buttons": _soundboard()}
+
+
+@app.post("/api/soundboard")
+def api_add_button(req: CustomButtonRequest):
+    """Turn a user's line into an AI-flavored permanent soundboard button.
+
+    Uses the same Bedrock model as the roast bot to punch up the text, saves it
+    to /data/soundboard.json, and (optionally) sends it to the group right away.
+    """
+    _rate_limit("custom_add")
+    if req.send:
+        _rate_limit("psn_send")
+    raw = (req.text or "").strip()
+    if not raw:
+        raise HTTPException(status_code=400, detail="Message cannot be empty")
+    if len(raw) > 200:
+        raise HTTPException(status_code=400, detail="Too long (200 char max)")
+
+    flavored = roast_bot.flavor_message(raw)
+
+    customs = _load_custom_buttons()
+    if len(customs) >= 24:
+        raise HTTPException(status_code=400, detail="Soundboard full (24 custom max)")
+
+    # Label: a short preview of the flavored text; color cycles.
+    label = flavored if len(flavored) <= 22 else flavored[:21].rstrip() + "…"
+    color = _CUSTOM_COLORS[len(customs) % len(_CUSTOM_COLORS)]
+    button = {"label": label, "msg": flavored, "cls": color, "custom": True}
+    customs.append(button)
+    _save_custom_buttons(customs)
+
+    # Fire it now so the person sees it land in the group.
+    sent = False
+    if req.send and _squad_messenger is not None:
+        try:
+            sent = _squad_messenger.send_message(flavored)
+        except Exception as e:  # noqa: BLE001
+            logger.warning("custom button initial send failed: %s", e)
+
+    return {"status": "added", "button": button, "flavored": flavored, "sent": sent}
+
+
+@app.post("/api/soundboard/delete")
+def api_delete_button(req: CustomButtonRequest):
+    """Remove a custom button by its exact message text."""
+    customs = _load_custom_buttons()
+    kept = [b for b in customs if b.get("msg") != req.text]
+    _save_custom_buttons(kept)
+    return {"status": "deleted", "removed": len(customs) - len(kept)}
+
+
 @app.get("/", response_class=HTMLResponse)
 @app.get("/dashboard", response_class=HTMLResponse)
 def dashboard():
@@ -711,10 +814,12 @@ def dashboard():
 
 
 
-# The dashboard's fun "soundboard" buttons. Each posts a canned message to the
-# squad PSN group via /v2/squad {message}. Kept in one list so it's easy to add
-# more. `cls` picks a color; `msg` None means it hits a non-message action path.
-_SOUNDBOARD = [
+# The dashboard's "soundboard" buttons. Built-in defaults live here; custom ones
+# that anyone adds via the dashboard are AI-flavored and persisted to
+# /data/soundboard.json so they become permanent buttons for everyone.
+# Each posts a canned message to the squad PSN group via /v2/squad {message};
+# `path` instead of `msg` hits a non-message action. `cls` picks a color.
+_SOUNDBOARD_DEFAULTS = [
     {"label": "👉👌 Have you ever?", "msg": "Have you ever? 👉👌", "cls": "c1"},
     {"label": "🧊☕ Iced Cap STORY", "msg": "🧊☕ Iced Cap STORRYYY! 📖✨", "cls": "c2"},
     {"label": "🙅‍♂️ Never", "msg": "Never 🙅‍♂️❌", "cls": "c3"},
@@ -722,17 +827,35 @@ _SOUNDBOARD = [
     {"label": "🎬 Zubi Clip It", "msg": "🎬 ZUBI CLIP IT!! 📸🔥 That was insane!", "cls": "c5"},
     {"label": "🎮 Squad Up", "msg": "🎮🔥 SQUAD UP! Who's hopping on? 🕹️💥", "cls": "c1"},
     {"label": "🕹️ Game Time", "msg": "🎮🔥 Let's party up y'all. It's GAME TIME! 🕹️💥", "cls": "c2"},
-    {"label": "😴 Wake Up", "msg": "😴⏰ WAKE UP! The squad needs you! 🎮", "cls": "c4"},
-    {"label": "🏆 Clutch!", "msg": "🏆🔥 CLUTCH!! What a play! 👏👏", "cls": "c5"},
-    {"label": "💀 GG EZ", "msg": "💀 GG EZ 😎🎮", "cls": "c3"},
-    {"label": "🍕 Food Break", "msg": "🍕 Food break y'all — brb 🤤", "cls": "c4"},
     {"label": "🔥 Roast Now", "path": "/roast/once", "cls": "roast"},
 ]
 
+from pathlib import Path as _Path
+
+_SOUNDBOARD_FILE = _Path("/data/soundboard.json")
+# Colors cycled through for new custom buttons.
+_CUSTOM_COLORS = ["c1", "c2", "c3", "c4", "c5"]
+
+
+def _load_custom_buttons() -> list[dict]:
+    try:
+        return json.loads(_SOUNDBOARD_FILE.read_text()).get("buttons", [])
+    except Exception:  # noqa: BLE001
+        return []
+
+
+def _save_custom_buttons(buttons: list[dict]) -> None:
+    _SOUNDBOARD_FILE.parent.mkdir(parents=True, exist_ok=True)
+    _SOUNDBOARD_FILE.write_text(json.dumps({"buttons": buttons}, indent=2))
+
+
+def _soundboard() -> list[dict]:
+    """Built-in buttons followed by persisted custom ones."""
+    return _SOUNDBOARD_DEFAULTS + _load_custom_buttons()
+
 
 def _soundboard_json() -> str:
-    import json as _json
-    return _json.dumps(_SOUNDBOARD)
+    return json.dumps(_soundboard())
 
 
 def _dashboard_html() -> str:
@@ -794,6 +917,8 @@ _DASHBOARD_TMPL = r"""<!doctype html>
   .c4 { background:linear-gradient(135deg,#12b866,#0aa0a0); }
   .c5 { background:linear-gradient(135deg,#ff9d3a,#ffd24a); color:#3a2400; }
   .roast { background:linear-gradient(135deg,#e0533a,#ff6f3a); }
+  .snd.add { background:rgba(255,255,255,.06); border:1.5px dashed rgba(140,160,255,.4);
+    color:#bcd0ff; }
 
   .tabs { display:flex; gap:6px; background:var(--card); border:1px solid var(--line);
     padding:5px; border-radius:15px; margin:14px 0; backdrop-filter:blur(18px);
@@ -878,12 +1003,18 @@ const esc = s => (s||'').replace(/[&<>"]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;
 const toast = m => { const t=$('toast'); t.textContent=m; t.classList.add('show');
   setTimeout(()=>t.classList.remove('show'),2000); };
 
-// Build the soundboard
-$('board').innerHTML = SOUNDBOARD.map((b,i)=>
-  '<button class="snd '+(b.cls||'c1')+'" data-i="'+i+'" onclick="fire(this)">'+esc(b.label)+'</button>'
-).join('');
+// Build the soundboard (mutable so custom adds refresh it live)
+let BUTTONS = SOUNDBOARD.slice();
+function renderBoard(){
+  $('board').innerHTML = BUTTONS.map((b,i)=>
+    '<button class="snd '+(b.cls||'c1')+'" data-i="'+i+'" onclick="fire(this)"'+
+    (b.custom?' oncontextmenu="return delBtn(event,'+i+')"':'')+'>'+esc(b.label)+'</button>'
+  ).join('') +
+    '<button class="snd add" onclick="openCustom()">＋ Custom</button>';
+}
+renderBoard();
 async function fire(el){
-  const b = SOUNDBOARD[el.dataset.i];
+  const b = BUTTONS[el.dataset.i];
   el.classList.add('flash'); setTimeout(()=>el.classList.remove('flash'),500);
   try {
     let r;
@@ -892,6 +1023,36 @@ async function fire(el){
       body:JSON.stringify({message:b.msg})}); }
     toast(r.ok ? 'Sent! 🎮' : 'Failed ('+r.status+')');
   } catch(e){ toast('Network error'); }
+}
+async function openCustom(){
+  const text = prompt("What should the button say? The AI will add the flavor 🔥");
+  if(!text || !text.trim()) return;
+  toast("✨ AI is cooking…");
+  try {
+    const r = await fetch('/api/soundboard',{method:'POST',
+      headers:{'Content-Type':'application/json'}, body:JSON.stringify({text:text.trim()})});
+    if(!r.ok){ toast('Failed ('+r.status+')'); return; }
+    const d = await r.json();
+    await refreshBoard();
+    toast('Added: '+d.flavored.slice(0,40));
+  } catch(e){ toast('Network error'); }
+}
+async function delBtn(ev, i){
+  ev.preventDefault();
+  const b = BUTTONS[i];
+  if(!b || !b.custom) return false;
+  if(!confirm('Remove this custom button?\n\n'+b.msg)) return false;
+  try {
+    await fetch('/api/soundboard/delete',{method:'POST',
+      headers:{'Content-Type':'application/json'}, body:JSON.stringify({text:b.msg})});
+    await refreshBoard(); toast('Removed');
+  } catch(e){ toast('Network error'); }
+  return false;
+}
+async function refreshBoard(){
+  try { const d = await (await fetch('/api/soundboard')).json();
+    BUTTONS = d.buttons || BUTTONS; renderBoard();
+  } catch(e){}
 }
 
 function tab(btn){

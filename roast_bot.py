@@ -116,6 +116,44 @@ def generate_single_roast() -> str:
     return generate_roast()
 
 
+def flavor_message(raw: str) -> str:
+    """Punch up a user-written line into squad-chat flavor, using the same
+    Bedrock model as the roast bot. Falls back to the raw text on any error so
+    a custom button always gets *something*.
+    """
+    raw = (raw or "").strip()
+    if not raw:
+        return raw
+    try:
+        response = _client.invoke_model(
+            modelId="us.anthropic.claude-sonnet-4-6",
+            contentType="application/json",
+            accept="application/json",
+            body=json.dumps({
+                "anthropic_version": "bedrock-2023-05-31",
+                "max_tokens": 120,
+                "temperature": 1.0,
+                "messages": [{
+                    "role": "user",
+                    "content": (
+                        f"{FRIENDS_CONTEXT}\n\n"
+                        "Rewrite this into ONE short, punchy PSN gaming-group-chat "
+                        "message with that same energy and emojis. Keep the original "
+                        "intent, make it hit harder. Just the message text, nothing "
+                        f"else:\n\n{raw}"
+                    ),
+                }],
+            }),
+        )
+        result = json.loads(response["body"].read())
+        out = result["content"][0]["text"].strip()
+        logger.info("flavored custom message: %s -> %s", raw[:40], out[:50])
+        return out or raw
+    except Exception as e:  # noqa: BLE001
+        logger.warning("flavor_message failed, using raw: %s", e)
+        return raw
+
+
 def send_roast(message: str) -> bool:
     """Send roast to PSN group."""
     with httpx.Client(timeout=10) as client:
