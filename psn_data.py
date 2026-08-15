@@ -253,33 +253,49 @@ def _trophy_summary(client: httpx.Client, token: str, account_id: str, own: bool
         return {}
 
 
-# If a title was last played within this window we treat the person as actively
-# playing it -- the presence API lags/hides console state, but the game list's
-# lastPlayedDateTime updates in real time (verified: shows the current game with
-# a "seconds ago" timestamp even when presence says offline). With the
-# per-minute background poll, a tight window closely tracks "online right now".
-RECENT_PLAY_WINDOW_SEC = 20 * 60
+# If a WHITELISTED game was last played within this window we treat the person
+# as actively playing it. The presence API is broken for these accounts, so the
+# gamelist lastPlayedDateTime is the signal (it lags, hence a generous window).
+RECENT_PLAY_WINDOW_SEC = 90 * 60
+
+# ONLY these count as "gaming" (per moiz). Anything else -- other games, media
+# apps like Prime Video/Netflix -- means offline. Substring, case-insensitive.
+GAME_WHITELIST = [
+    "arc raider",
+    "call of duty",
+    "battlefield",
+    "big walk",
+    "dying light",
+]
+
+
+def _is_whitelisted(name: str) -> bool:
+    n = (name or "").lower()
+    return any(g in n for g in GAME_WHITELIST)
 
 
 def _recent_game(client: httpx.Client, token: str) -> dict:
-    """Most recently played title (self-token only) with art + freshness.
+    """Most recent WHITELISTED game (self-token only) with art + freshness.
 
-    Returns recent_game/icon plus recent_played_at and recent_active (True if
-    the last-played time is within RECENT_PLAY_WINDOW_SEC -> currently playing).
+    Scans the recent-titles list and picks the newest entry whose name is in
+    GAME_WHITELIST -- everything else (other games, media apps) is ignored, so a
+    person is only ever 'playing'/'last game' for one of the approved titles.
+    recent_active is True when that game was played within the window.
     """
     try:
         r = client.get(
             f"{GAMELIST}/users/me/titles",
-            params={"categories": "ps4_game,ps5_native_game", "limit": "1"},
+            params={"categories": "ps4_game,ps5_native_game", "limit": "20"},
             headers=_headers(token),
             timeout=15,
         )
         if r.status_code != 200:
             return {}
         titles = r.json().get("titles") or []
-        if not titles:
+        # Titles come newest-first; take the first whitelisted one.
+        t = next((x for x in titles if _is_whitelisted(x.get("name"))), None)
+        if not t:
             return {}
-        t = titles[0]
         img = (t.get("imageUrl") or "").replace("http://", "https://")
         last = t.get("lastPlayedDateTime")
         active = False

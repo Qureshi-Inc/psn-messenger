@@ -1075,7 +1075,7 @@ _DASHBOARD_TMPL = r"""<!doctype html>
   .avwrap { position:relative; flex:none; }
   .av { width:50px; height:50px; border-radius:12px; background:#1a1030; object-fit:cover;
     display:block; border:1px solid rgba(255,255,255,.1); }
-  .on .av { border-color:rgba(140,255,43,.6); box-shadow:0 0 14px rgba(140,255,43,.4); }
+  .playing .av { border-color:rgba(140,255,43,.6); box-shadow:0 0 14px rgba(140,255,43,.4); }
   .gicon { position:absolute; right:-6px; bottom:-6px; width:26px; height:26px;
     border-radius:8px; object-fit:cover; border:2px solid #0e0620; box-shadow:0 2px 8px rgba(0,0,0,.7); }
   .who { flex:1; min-width:0; }
@@ -1086,8 +1086,7 @@ _DASHBOARD_TMPL = r"""<!doctype html>
     overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
   .dot { width:9px; height:9px; border-radius:50%; margin-right:7px; flex:none;
     background:#4a3f6b; display:inline-block; }
-  .on .dot { background:var(--lime); box-shadow:0 0 10px var(--lime); }
-  .on .name { color:#eaffd4; }
+  .playing .name { color:#eaffd4; }
   .playing .dot { background:var(--lime); box-shadow:0 0 12px var(--lime); animation:pulse 1.6s ease-in-out infinite; }
   @keyframes pulse { 50% { box-shadow:0 0 3px var(--lime); opacity:.55; } }
   .game-badge { color:var(--lime); font-weight:600; text-shadow:0 0 8px rgba(140,255,43,.4); }
@@ -1312,14 +1311,15 @@ function renderSquad(){
     const gsrc=(m.game_icon)||(m.recent_game_icon)||'';
     const gi=gsrc?'<img class="gicon" src="'+esc(gsrc)+'">':'';
     const avImg='<div class="avwrap">'+(av?'<img class="av" src="'+esc(av)+'">':'<div class="av"></div>')+gi+'</div>';
-    let st;
-    if(m.playing) st='<span class="game-badge">Playing <b>'+esc(m.game)+'</b></span>';
-    else if(m.online) st='Online'+(m.platform?' · '+esc(m.platform):'');
-    // Offline: just show their last game (no timestamps / "last online").
-    else if(m.recent_game) st='<span class="lastgame">'+esc(m.recent_game)+'</span>';
-    else st='<span class="lastgame">—</span>';
+    // Game-centric: no online/offline. If they recently switched to a
+    // whitelisted game they're "ON" it (glowing); otherwise show their last
+    // game, dimmed. No timestamps.
+    const g = m.game || m.recent_game;
+    let st, cls='';
+    if(m.playing && g){ st='<span class="game-badge">🎮 On <b>'+esc(g)+'</b></span>'; cls='playing'; }
+    else if(g){ st='<span class="lastgame">'+esc(g)+'</span>'; }
+    else { st='<span class="lastgame">no recent game</span>'; }
     const mm=m.mm_username?'<span class="mm">@'+esc(m.mm_username)+'</span>':'';
-    const cls=m.playing?'on playing':(m.online?'on':'');
     return '<div class="row '+cls+'">'+avImg+'<div class="who"><div class="name"><span class="dot"></span>'+name+mm+'</div>'+
       '<div class="state">'+st+'</div></div>'+trophyCells(m)+'</div>';
   }).join('');
@@ -1383,8 +1383,10 @@ async function loadSquad(){
   try {
     const {squad=[]}=await (await fetch('/api/squad')).json();
     SQUAD=squad;
-    const playing=squad.filter(m=>m.playing).length, online=squad.filter(m=>m.online).length;
-    $('livecount').innerHTML = squad.length ? ('<b>'+online+'</b> online'+(playing?' · '+playing+' 🎮':'')) : '';
+    const playing=squad.filter(m=>m.playing).length;
+    $('livecount').innerHTML = playing ? ('<b>'+playing+'</b> 🎮 in a game') : 'nobody in a game';
+    // On-a-game members float to the top.
+    squad.sort((a,b)=> (b.playing?1:0)-(a.playing?1:0));
     renderTogether(); renderStats(); renderSquad(); renderBoard();
   } catch(e){ $('squad').innerHTML='<div class="empty">Couldn\'t load squad.</div>'; }
 }
