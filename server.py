@@ -876,7 +876,7 @@ _DASHBOARD_TMPL = r"""<!doctype html>
   html,body { margin:0; }
   body { font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif;
     color:var(--txt); min-height:100dvh; background:var(--bg);
-    padding:0 0 40px; position:relative; overflow-x:hidden; }
+    padding:0 0 240px; position:relative; overflow-x:hidden; }
   body::before,body::after { content:""; position:fixed; inset:-30% -10%; z-index:-2;
     background:
       radial-gradient(42% 42% at 20% 14%, rgba(0,112,209,.4), transparent 60%),
@@ -897,12 +897,17 @@ _DASHBOARD_TMPL = r"""<!doctype html>
   .top .live b { color:var(--ok); font-size:15px; }
 
   /* STICKY SOUNDBOARD -- the hero. Always at top, compact, tappable. */
-  .board-wrap { position:sticky; top:0; z-index:20; padding:8px 0 12px;
-    background:linear-gradient(180deg, rgba(7,11,24,.94) 60%, rgba(7,11,24,0));
-    backdrop-filter:blur(8px); -webkit-backdrop-filter:blur(8px); }
+  /* Soundboard pinned to the BOTTOM of the screen -- always thumb-reachable. */
+  .board-wrap { position:fixed; left:0; right:0; bottom:0; z-index:30;
+    padding:10px 14px calc(12px + env(safe-area-inset-bottom));
+    background:linear-gradient(0deg, rgba(7,11,24,.97) 72%, rgba(7,11,24,0));
+    backdrop-filter:blur(10px); -webkit-backdrop-filter:blur(10px);
+    border-top:1px solid var(--line); }
+  .board-wrap > * { max-width:760px; margin:0 auto; }
   .board-title { font-size:11px; letter-spacing:1.5px; color:var(--dim);
     text-transform:uppercase; margin:0 4px 8px; font-weight:700; }
-  .board { display:grid; grid-template-columns:repeat(3,1fr); gap:8px; }
+  .board { display:grid; grid-template-columns:repeat(3,1fr); gap:8px;
+    max-height:38vh; overflow-y:auto; }
   .snd { border:none; border-radius:14px; padding:14px 8px; font-size:12.5px;
     font-weight:700; cursor:pointer; color:#fff; line-height:1.25; min-height:58px;
     display:flex; align-items:center; justify-content:center; text-align:center;
@@ -982,18 +987,18 @@ _DASHBOARD_TMPL = r"""<!doctype html>
     <div class="live" id="livecount"></div>
   </div>
 
-  <div class="board-wrap">
-    <div class="board-title">🔊 Soundboard — tap to send</div>
-    <div class="board" id="board"></div>
-  </div>
-
   <div class="tabs">
     <button class="tab on" data-p="squad" onclick="tab(this)">Squad</button>
     <button class="tab" data-p="lb" onclick="tab(this)">🏆 Leaderboard</button>
   </div>
   <div class="panel on" id="p-squad"><div class="card" id="squad"><div class="spin">Loading squad…</div></div></div>
   <div class="panel" id="p-lb"><div class="card" id="lb"><div class="spin">Loading leaderboard…</div></div></div>
-  <p style="text-align:center;margin-top:16px"><a class="link-cta" href="/portal">＋ Link your PlayStation account</a></p>
+  <p style="text-align:center;margin:16px 0"><a class="link-cta" href="/portal">＋ Link your PlayStation account</a></p>
+</div>
+
+<div class="board-wrap">
+  <div class="board-title">🔊 Soundboard — tap to send</div>
+  <div class="board" id="board"></div>
 </div>
 <div class="toast" id="toast"></div>
 <script>
