@@ -117,9 +117,12 @@ def generate_single_roast() -> str:
 
 
 def flavor_message(raw: str) -> str:
-    """Punch up a user-written line into squad-chat flavor, using the same
-    Bedrock model as the roast bot. Falls back to the raw text on any error so
-    a custom button always gets *something*.
+    """Lightly spice up a user-written line WITHOUT changing its meaning.
+
+    This must stay faithful to what the user typed -- same words/intent, just a
+    little group-chat energy and a fitting emoji or two. It is NOT the roast bot,
+    so it deliberately avoids the roast persona/FRIENDS_CONTEXT. Falls back to
+    the raw text on any error.
     """
     raw = (raw or "").strip()
     if not raw:
@@ -132,21 +135,23 @@ def flavor_message(raw: str) -> str:
             body=json.dumps({
                 "anthropic_version": "bedrock-2023-05-31",
                 "max_tokens": 120,
-                "temperature": 1.0,
+                "temperature": 0.6,
                 "messages": [{
                     "role": "user",
                     "content": (
-                        f"{FRIENDS_CONTEXT}\n\n"
-                        "Rewrite this into ONE short, punchy PSN gaming-group-chat "
-                        "message with that same energy and emojis. Keep the original "
-                        "intent, make it hit harder. Just the message text, nothing "
-                        f"else:\n\n{raw}"
+                        "You add a little flavor to a group-chat message. Keep the "
+                        "EXACT same meaning, wording, and intent as the input -- do "
+                        "NOT turn it into a roast, joke, or a message about someone "
+                        "else. Just lightly punch it up: keep their words, maybe fix "
+                        "casing and add 1-2 fitting emojis. If it's already good, "
+                        "return it almost unchanged. Output ONLY the final message, "
+                        f"nothing else.\n\nMessage: {raw}"
                     ),
                 }],
             }),
         )
         result = json.loads(response["body"].read())
-        out = result["content"][0]["text"].strip()
+        out = result["content"][0]["text"].strip().strip('"')
         logger.info("flavored custom message: %s -> %s", raw[:40], out[:50])
         return out or raw
     except Exception as e:  # noqa: BLE001
