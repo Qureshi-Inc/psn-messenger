@@ -1005,14 +1005,14 @@ const toast = m => { const t=$('toast'); t.textContent=m; t.classList.add('show'
 
 // Build the soundboard (mutable so custom adds refresh it live)
 let BUTTONS = SOUNDBOARD.slice();
-function renderBoard(){
+function renderButtons(){
   $('board').innerHTML = BUTTONS.map((b,i)=>
     '<button class="snd '+(b.cls||'c1')+'" data-i="'+i+'" onclick="fire(this)"'+
     (b.custom?' oncontextmenu="return delBtn(event,'+i+')"':'')+'>'+esc(b.label)+'</button>'
   ).join('') +
     '<button class="snd add" onclick="openCustom()">＋ Custom</button>';
 }
-renderBoard();
+renderButtons();
 async function fire(el){
   const b = BUTTONS[el.dataset.i];
   el.classList.add('flash'); setTimeout(()=>el.classList.remove('flash'),500);
@@ -1051,7 +1051,7 @@ async function delBtn(ev, i){
 }
 async function refreshBoard(){
   try { const d = await (await fetch('/api/soundboard')).json();
-    BUTTONS = d.buttons || BUTTONS; renderBoard();
+    BUTTONS = d.buttons || BUTTONS; renderButtons();
   } catch(e){}
 }
 
