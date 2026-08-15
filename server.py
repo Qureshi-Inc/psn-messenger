@@ -207,7 +207,8 @@ import roast_bot
 async def roast_start():
     if roast_bot.is_running():
         return {"status": "already running"}
-    roast_bot.start()
+    if not roast_bot.start():
+        return {"status": "disabled", "message": "Auto-roast is turned off."}
     return {"status": "started", "message": "Roast bot activated 🔥"}
 
 
