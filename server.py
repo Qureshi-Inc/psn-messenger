@@ -976,10 +976,18 @@ _DASHBOARD_TMPL = r"""<!doctype html>
     backdrop-filter:blur(10px); -webkit-backdrop-filter:blur(10px);
     border-top:1px solid var(--line); }
   .board-wrap > * { max-width:760px; margin:0 auto; }
-  .board-title { font-size:11px; letter-spacing:1.5px; color:var(--dim);
-    text-transform:uppercase; margin:0 4px 8px; font-weight:700; }
+  .board-title { display:flex; align-items:center; justify-content:space-between;
+    width:100%; font-size:11px; letter-spacing:1.5px; color:var(--dim);
+    text-transform:uppercase; margin:0 0 8px; font-weight:700; padding:4px 4px;
+    background:none; border:none; cursor:pointer; }
+  .board-title .chev { transition:transform .25s ease; font-size:13px; }
   .board { display:grid; grid-template-columns:repeat(3,1fr); gap:8px;
-    max-height:30vh; overflow-y:auto; -webkit-overflow-scrolling:touch; }
+    max-height:30vh; overflow-y:auto; -webkit-overflow-scrolling:touch;
+    transition:max-height .28s ease, opacity .2s ease, margin .28s ease; }
+  /* collapsed: hide the buttons grid, keep title + quick-send visible */
+  .board-wrap.collapsed .board { max-height:0; opacity:0; overflow:hidden;
+    margin-bottom:-8px; pointer-events:none; }
+  .board-wrap.collapsed .chev { transform:rotate(-90deg); }
   /* ad-hoc quick-send row -- for one-off messages so people don't make buttons */
   .quick { display:flex; gap:8px; margin-top:10px; }
   .quick input { flex:1; padding:13px 15px; border-radius:13px; font-size:15px;
@@ -1080,8 +1088,10 @@ _DASHBOARD_TMPL = r"""<!doctype html>
   <p style="text-align:center;margin:16px 0"><a class="link-cta" href="/portal">＋ Link your PlayStation account</a></p>
 </div>
 
-<div class="board-wrap">
-  <div class="board-title">🔊 Soundboard — tap to send</div>
+<div class="board-wrap" id="boardWrap">
+  <button class="board-title" id="boardToggle" onclick="toggleBoard()">
+    <span>🔊 Soundboard</span><span class="chev" id="chev">▾</span>
+  </button>
   <div class="board" id="board"></div>
   <div class="quick">
     <input id="quick" type="text" placeholder="Send a quick message to the squad…"
@@ -1114,6 +1124,13 @@ function syncBoardHeight(){
   const bar = document.querySelector('.board-wrap');
   if(bar) document.body.style.setProperty('--board-h', (bar.offsetHeight + 16) + 'px');
 }
+// Collapsible soundboard. Default = expanded; remembers the user's choice.
+function toggleBoard(){
+  const w=$('boardWrap'); w.classList.toggle('collapsed');
+  try{ localStorage.setItem('sb_collapsed', w.classList.contains('collapsed')?'1':'0'); }catch(e){}
+  setTimeout(syncBoardHeight,300);
+}
+if(localStorage.getItem('sb_collapsed')==='1') $('boardWrap').classList.add('collapsed');
 window.addEventListener('resize', syncBoardHeight);
 renderButtons();
 async function fire(el){
