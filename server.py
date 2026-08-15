@@ -743,17 +743,19 @@ _poller_started = False
 
 import mattermost as mm_client
 
-# ARC Raiders alert: when a squad member STARTS playing it, DM these people.
-# Match is substring/case-insensitive so "ARC Raiders" variants all catch.
+# ARC Raiders alert: when a squad member STARTS playing it, post to the
+# "Squad Alerts" Mattermost channel. Match is substring/case-insensitive.
 _ARC_MATCH = "arc raider"
-_ARC_NOTIFY = ["themoosecompany", "zubair221b", "deception", "moiz"]
-# Track who we've already alerted for (edge detection) so we DM once per session,
-# not every minute. A player drops out of the set when they stop playing ARC.
+_SQUAD_ALERTS_CHANNEL = os.environ.get(
+    "SQUAD_ALERTS_CHANNEL_ID", "5115wy8pc7ffuj5c3zor51jxew"
+)
+# Track who we've already alerted for (edge detection) so we post once per
+# session, not every minute. A player drops from the set when they stop.
 _arc_playing: set[str] = set()
 
 
 def _check_arc_alert(squad: list[dict]) -> None:
-    """DM the notify list when someone newly starts playing ARC Raiders."""
+    """Post to Squad Alerts when someone newly starts playing ARC Raiders."""
     if not mm_client.available():
         return
     now_playing = {
@@ -767,8 +769,8 @@ def _check_arc_alert(squad: list[dict]) -> None:
             f"🎮🔫 **{player}** just hopped on **ARC Raiders**! "
             "Squad up — who's in? 💥"
         )
-        sent = mm_client.dm_users(_ARC_NOTIFY, msg)
-        logger.info("arc alert: %s started ARC Raiders -> DM'd %d", player, sent)
+        ok = mm_client.post_channel(_SQUAD_ALERTS_CHANNEL, msg)
+        logger.info("arc alert: %s started ARC Raiders -> posted=%s", player, ok)
     # Reset the tracking set to whoever is currently playing (so a stop->start
     # later re-alerts, but continuous play doesn't).
     _arc_playing.clear()

@@ -79,3 +79,21 @@ def dm_user(username: str, message: str) -> bool:
 def dm_users(usernames: list[str], message: str) -> int:
     """DM several users; returns how many succeeded."""
     return sum(1 for u in usernames if dm_user(u, message))
+
+
+def post_channel(channel_id: str, message: str) -> bool:
+    """Post a message to a channel by id (bot must be a member). Best-effort."""
+    if not available() or not channel_id:
+        return False
+    try:
+        with httpx.Client() as client:
+            r = client.post(
+                f"{_BASE}/api/v4/posts",
+                headers=_headers(),
+                json={"channel_id": channel_id, "message": message},
+                timeout=15,
+            )
+            return r.status_code in (200, 201)
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("mm: channel post failed: %s", exc)
+        return False
