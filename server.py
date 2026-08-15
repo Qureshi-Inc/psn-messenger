@@ -1158,12 +1158,17 @@ function renderSquad(){
   el.innerHTML = SQUAD.map(m=>{
     const name=esc(m.online_id||m.mm_username||'Unknown');
     const av=m.avatar||'';
-    const gi=(m.playing&&m.game_icon)?'<img class="gicon" src="'+esc(m.game_icon)+'">':'';
+    // Show the game icon for both currently-playing and last-played (offline).
+    const gsrc=(m.game_icon)||(m.recent_game_icon)||'';
+    const gi=gsrc?'<img class="gicon" src="'+esc(gsrc)+'">':'';
     const avImg='<div class="avwrap">'+(av?'<img class="av" src="'+esc(av)+'">':'<div class="av"></div>')+gi+'</div>';
     let st;
     if(m.playing) st='<span class="game-badge">Playing <b>'+esc(m.game)+'</b></span>';
     else if(m.online) st='Online'+(m.platform?' · '+esc(m.platform):'');
-    else if(m.recent_game) st='Last played '+esc(m.recent_game)+' · '+fmtLast(m.last_online);
+    // Offline: the gamelist lastPlayedDateTime (recent_played_at) is accurate;
+    // the presence lastOnlineDate is stale, so prefer the former.
+    else if(m.recent_game) st='Last seen '+fmtLast(m.recent_played_at||m.last_online)+
+      ' · '+esc(m.recent_game);
     else st='Last online '+fmtLast(m.last_online);
     const mm=m.mm_username?'<span class="mm">@'+esc(m.mm_username)+'</span>':'';
     const cls=m.playing?'on playing':(m.online?'on':'');
