@@ -12,8 +12,14 @@
     "MinimumVersion": "2.9"
   },
   "OS": [
-    { "Platform": "mac", "MinimumVersion": "10.15" },
-    { "Platform": "windows", "MinimumVersion": "10" }
+    {
+      "Platform": "mac",
+      "MinimumVersion": "10.15"
+    },
+    {
+      "Platform": "windows",
+      "MinimumVersion": "10"
+    }
   ],
   "Actions": [
     {
@@ -21,8 +27,16 @@
       "Name": "Have You Ever?",
       "Tooltip": "Send 'Have you ever?' to PSN group",
       "Icon": "imgs/plugin",
-      "Controllers": ["Keypad"],
-      "States": [{ "Image": "imgs/plugin", "TitleAlignment": "bottom", "FontSize": "9" }],
+      "Controllers": [
+        "Keypad"
+      ],
+      "States": [
+        {
+          "Image": "imgs/plugin",
+          "TitleAlignment": "bottom",
+          "FontSize": "9"
+        }
+      ],
       "SupportedInMultiActions": false
     },
     {
@@ -30,8 +44,16 @@
       "Name": "Iced Cap Story",
       "Tooltip": "Send 'Iced Cap STORRYYY!' to PSN group",
       "Icon": "imgs/plugin",
-      "Controllers": ["Keypad"],
-      "States": [{ "Image": "imgs/plugin", "TitleAlignment": "bottom", "FontSize": "9" }],
+      "Controllers": [
+        "Keypad"
+      ],
+      "States": [
+        {
+          "Image": "imgs/plugin",
+          "TitleAlignment": "bottom",
+          "FontSize": "9"
+        }
+      ],
       "SupportedInMultiActions": false
     },
     {
@@ -39,8 +61,16 @@
       "Name": "Water Break",
       "Tooltip": "Send 'Water break!' to PSN group",
       "Icon": "imgs/plugin",
-      "Controllers": ["Keypad"],
-      "States": [{ "Image": "imgs/plugin", "TitleAlignment": "bottom", "FontSize": "9" }],
+      "Controllers": [
+        "Keypad"
+      ],
+      "States": [
+        {
+          "Image": "imgs/plugin",
+          "TitleAlignment": "bottom",
+          "FontSize": "9"
+        }
+      ],
       "SupportedInMultiActions": false
     },
     {
@@ -48,8 +78,16 @@
       "Name": "Never",
       "Tooltip": "Send 'Never' to PSN group",
       "Icon": "imgs/plugin",
-      "Controllers": ["Keypad"],
-      "States": [{ "Image": "imgs/plugin", "TitleAlignment": "bottom", "FontSize": "9" }],
+      "Controllers": [
+        "Keypad"
+      ],
+      "States": [
+        {
+          "Image": "imgs/plugin",
+          "TitleAlignment": "bottom",
+          "FontSize": "9"
+        }
+      ],
       "SupportedInMultiActions": false
     },
     {
@@ -57,8 +95,16 @@
       "Name": "Start Roast",
       "Tooltip": "Start AI roast bot",
       "Icon": "imgs/plugin",
-      "Controllers": ["Keypad"],
-      "States": [{ "Image": "imgs/plugin", "TitleAlignment": "bottom", "FontSize": "9" }],
+      "Controllers": [
+        "Keypad"
+      ],
+      "States": [
+        {
+          "Image": "imgs/plugin",
+          "TitleAlignment": "bottom",
+          "FontSize": "9"
+        }
+      ],
       "SupportedInMultiActions": false
     },
     {
@@ -66,8 +112,16 @@
       "Name": "Stop Roast",
       "Tooltip": "Stop AI roast bot",
       "Icon": "imgs/plugin",
-      "Controllers": ["Keypad"],
-      "States": [{ "Image": "imgs/plugin", "TitleAlignment": "bottom", "FontSize": "9" }],
+      "Controllers": [
+        "Keypad"
+      ],
+      "States": [
+        {
+          "Image": "imgs/plugin",
+          "TitleAlignment": "bottom",
+          "FontSize": "9"
+        }
+      ],
       "SupportedInMultiActions": false
     },
     {
@@ -75,8 +129,50 @@
       "Name": "Roast Now",
       "Tooltip": "Send one roast immediately",
       "Icon": "imgs/plugin",
-      "Controllers": ["Keypad"],
-      "States": [{ "Image": "imgs/plugin", "TitleAlignment": "bottom", "FontSize": "9" }],
+      "Controllers": [
+        "Keypad"
+      ],
+      "States": [
+        {
+          "Image": "imgs/plugin",
+          "TitleAlignment": "bottom",
+          "FontSize": "9"
+        }
+      ],
+      "SupportedInMultiActions": false
+    },
+    {
+      "UUID": "com.psn.slapper.gametime",
+      "Name": "Game Time",
+      "Tooltip": "Send game time message to WhatsApp group",
+      "Icon": "imgs/plugin",
+      "Controllers": [
+        "Keypad"
+      ],
+      "States": [
+        {
+          "Image": "imgs/plugin",
+          "TitleAlignment": "bottom",
+          "FontSize": "9"
+        }
+      ],
+      "SupportedInMultiActions": false
+    },
+    {
+      "UUID": "com.psn.slapper.squadup",
+      "Name": "Squad Up",
+      "Tooltip": "Rally the squad group (everyone except wolfie/IG Juicy)",
+      "Icon": "imgs/plugin",
+      "Controllers": [
+        "Keypad"
+      ],
+      "States": [
+        {
+          "Image": "imgs/plugin",
+          "TitleAlignment": "bottom",
+          "FontSize": "9"
+        }
+      ],
       "SupportedInMultiActions": false
     }
   ]

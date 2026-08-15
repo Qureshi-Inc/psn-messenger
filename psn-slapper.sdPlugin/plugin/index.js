@@ -3,7 +3,14 @@ const { StreamDock } = require("./streamdock");
 const { makeCanvas, text, rect, pngDataUri } = require("./canvas");
 const IDLE_ICON = require("./icon");
 
-const PSN_API_URL = process.env.PSN_MESSENGER_URL || "http://192.168.5.54:3021";
+// Each service is reachable two ways: opti3's Tailscale IP (works anywhere the
+// tailnet is up) and its LAN IP (works at home even if Tailscale is down). We
+// try them in order so a Tailscale hiccup doesn't kill the buttons when home.
+// Override with a comma-separated list in the env var if the IPs ever change.
+const PSN_API_URLS = (process.env.PSN_MESSENGER_URLS ||
+  "http://100.123.228.75:3021,http://192.168.5.54:3021").split(",").map(s => s.trim()).filter(Boolean);
+const WHATSAPP_API_URLS = (process.env.WHATSAPP_API_URLS ||
+  "http://100.123.228.75:3100,http://192.168.5.54:3100").split(",").map(s => s.trim()).filter(Boolean);
 
 const MESSAGES = {
   "com.psn.slapper.haveyouever": "Have you ever? 👉👌",
@@ -50,15 +57,17 @@ async function renderError() {
   return pngDataUri(img);
 }
 
-function sendPsnMessage(message) {
+// POST to `path` against one base URL. Resolves body on 2xx, rejects otherwise.
+function postOnce(base, path, bodyObj) {
   return new Promise((resolve, reject) => {
-    const url = new URL("/v2/send", PSN_API_URL);
-    const body = JSON.stringify({ message });
-    const req = http.request(url, {
-      method: "POST",
-      headers: { "Content-Type": "application/json", "Content-Length": Buffer.byteLength(body) },
-      timeout: 10000,
-    }, (res) => {
+    const url = new URL(path, base);
+    const body = bodyObj ? JSON.stringify(bodyObj) : "";
+    const opts = { method: "POST", timeout: 8000, headers: {} };
+    if (body) {
+      opts.headers["Content-Type"] = "application/json";
+      opts.headers["Content-Length"] = Buffer.byteLength(body);
+    }
+    const req = http.request(url, opts, (res) => {
       let data = "";
       res.on("data", (chunk) => data += chunk);
       res.on("end", () => {
@@ -67,9 +76,27 @@ function sendPsnMessage(message) {
       });
     });
     req.on("error", reject);
-    req.write(body);
+    req.on("timeout", () => req.destroy(new Error("timeout")));
+    if (body) req.write(body);
     req.end();
   });
+}
+
+// Try each base URL in order (Tailscale, then LAN); return the first success.
+async function postWithFallback(bases, path, bodyObj) {
+  let lastErr;
+  for (const base of bases) {
+    try {
+      return await postOnce(base, path, bodyObj);
+    } catch (e) {
+      lastErr = e;
+    }
+  }
+  throw lastErr || new Error("all endpoints failed");
+}
+
+function sendPsnMessage(message) {
+  return postWithFallback(PSN_API_URLS, "/v2/send", { message });
 }
 
 async function renderIdleWaterBreak() {
@@ -116,6 +143,24 @@ async function renderIdleRoastNow() {
   return pngDataUri(img);
 }
 
+async function renderIdleGameTime() {
+  const { img, ctx } = makeCanvas(W, H);
+  rect(ctx, 0, 0, W, H, "#1b5e20");
+  text(ctx, "🎮", 63, 45, 20, "#ffffff", "center");
+  text(ctx, "GAME", 63, 78, 11, "#ffffff", "center", "DeckBold");
+  text(ctx, "TIME!", 63, 98, 11, "#4CAF50", "center", "DeckBold");
+  return pngDataUri(img);
+}
+
+async function renderIdleSquadUp() {
+  const { img, ctx } = makeCanvas(W, H);
+  rect(ctx, 0, 0, W, H, "#3949ab");
+  text(ctx, "🎮", 63, 45, 20, "#ffffff", "center");
+  text(ctx, "SQUAD", 63, 78, 11, "#ffffff", "center", "DeckBold");
+  text(ctx, "UP!", 63, 98, 11, "#90CAF9", "center", "DeckBold");
+  return pngDataUri(img);
+}
+
 async function getIdleImage(action) {
   if (action === "com.psn.slapper.icedcap") return renderIdleIcedCap();
   if (action === "com.psn.slapper.waterbreak") return renderIdleWaterBreak();
@@ -123,23 +168,17 @@ async function getIdleImage(action) {
   if (action === "com.psn.slapper.roaststart") return renderIdleRoastStart();
   if (action === "com.psn.slapper.roaststop") return renderIdleRoastStop();
   if (action === "com.psn.slapper.roastnow") return renderIdleRoastNow();
+  if (action === "com.psn.slapper.gametime") return renderIdleGameTime();
+  if (action === "com.psn.slapper.squadup") return renderIdleSquadUp();
   return renderIdle();
 }
 
+function sendWhatsAppMessage(message, mentionAll = true) {
+  return postWithFallback(WHATSAPP_API_URLS, "/send", { message, mentionAll });
+}
+
 function callEndpoint(path) {
-  return new Promise((resolve, reject) => {
-    const url = new URL(path, PSN_API_URL);
-    const req = http.request(url, { method: "POST", timeout: 10000 }, (res) => {
-      let data = "";
-      res.on("data", (chunk) => data += chunk);
-      res.on("end", () => {
-        if (res.statusCode >= 200 && res.statusCode < 300) resolve(data);
-        else reject(new Error(`HTTP ${res.statusCode}: ${data}`));
-      });
-    });
-    req.on("error", reject);
-    req.end();
-  });
+  return postWithFallback(PSN_API_URLS, path, null);
 }
 
 async function handlePress(context) {
@@ -179,6 +218,39 @@ async function handlePress(context) {
       sd.setImage(context, await renderSent());
       setTimeout(async () => { sd.setImage(context, await getIdleImage(action)); }, 2000);
     } catch (e) {
+      sd.setImage(context, await renderError());
+      setTimeout(async () => { sd.setImage(context, await getIdleImage(action)); }, 3000);
+    }
+    return;
+  }
+
+  if (action === "com.psn.slapper.gametime") {
+    sd.setImage(context, await renderSending());
+    try {
+      // Send to both WhatsApp and PSN
+      await Promise.all([
+        sendWhatsAppMessage("🎮🔥 Let's party up y'all. It's GAME TIME! 🕹️💥"),
+        sendPsnMessage("🎮🔥 Let's party up y'all. It's GAME TIME! 🕹️💥"),
+      ]);
+      sd.setImage(context, await renderSent());
+      setTimeout(async () => { sd.setImage(context, await getIdleImage(action)); }, 2000);
+    } catch (e) {
+      console.error("Game Time send failed:", e.message);
+      sd.setImage(context, await renderError());
+      setTimeout(async () => { sd.setImage(context, await getIdleImage(action)); }, 3000);
+    }
+    return;
+  }
+
+  if (action === "com.psn.slapper.squadup") {
+    sd.setImage(context, await renderSending());
+    try {
+      // Rally the dedicated squad PSN group (everyone except wolfie/IG Juicy).
+      await callEndpoint("/v2/squad");
+      sd.setImage(context, await renderSent());
+      setTimeout(async () => { sd.setImage(context, await getIdleImage(action)); }, 2000);
+    } catch (e) {
+      console.error("Squad Up send failed:", e.message);
       sd.setImage(context, await renderError());
       setTimeout(async () => { sd.setImage(context, await getIdleImage(action)); }, 3000);
     }

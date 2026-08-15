@@ -9,6 +9,9 @@ logger = logging.getLogger(__name__)
 
 NPSSO_TOKEN = os.environ.get("NPSSO_TOKEN")
 GROUP_ID = os.environ.get("GROUP_ID")
+# Auto-Squad: a separate PSN group (everyone except wolfie/IG_Juicy) that the
+# "Squad Up" Stream Deck button rallies. Created 2026-08-15; overridable via env.
+SQUAD_GROUP_ID = os.environ.get("SQUAD_GROUP_ID", "213250d833ccce334b651e2ee15e365c97468e02-869")
 
 if not NPSSO_TOKEN:
     raise RuntimeError("NPSSO_TOKEN environment variable is required")
@@ -113,6 +116,39 @@ def v2_get_messages(limit: int = 5):
         return {"messages": messages, "version": "v2"}
     except Exception as e:
         logger.error(f"v2: Get messages failed: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+# === Auto-Squad: rally the squad group (everyone except wolfie/IG_Juicy) ===
+
+# A separate messenger bound to the squad group, reusing the same auth.
+try:
+    _squad_messenger = PSNMessenger(psn_auth, SQUAD_GROUP_ID) if _v2_available else None
+except Exception as e:  # noqa: BLE001
+    logger.warning(f"squad: messenger init failed: {e}")
+    _squad_messenger = None
+
+
+class SquadRequest(BaseModel):
+    message: str | None = None
+
+
+@app.post("/v2/squad")
+def v2_squad(req: SquadRequest | None = None):
+    """Post a 'squad up' rally message to the dedicated squad group."""
+    if _squad_messenger is None:
+        raise HTTPException(status_code=503, detail="squad messenger not initialized")
+    text = (req.message.strip() if (req and req.message) else "") or \
+        "🎮🔥 SQUAD UP! Who's hopping on? 🕹️💥"
+    try:
+        if _squad_messenger.send_message(text):
+            logger.info(f"squad: sent -> {text[:60]}")
+            return {"status": "sent", "group": SQUAD_GROUP_ID, "message": text}
+        raise HTTPException(status_code=500, detail="Failed to send squad message")
+    except HTTPException:
+        raise
+    except Exception as e:  # noqa: BLE001
+        logger.error(f"squad: send failed: {e}")
         raise HTTPException(status_code=500, detail=str(e))
 
 
