@@ -88,18 +88,26 @@ def _exchange_npsso(npsso: str) -> dict:
         "redirect_uri": REDIRECT_URI,
         "response_type": "code",
     }
+    # Step 1: NPSSO cookie -> authorization code (302 with ?code= in Location).
     with httpx.Client(follow_redirects=False, timeout=15) as client:
         resp = client.get(AUTH_URL, params=params, cookies={"npsso": npsso})
 
     if resp.status_code != 302:
+        logger.warning(
+            "portal: auth-code step returned %d (expected 302); body=%s",
+            resp.status_code,
+            resp.text[:300],
+        )
         raise LinkError(
             "PlayStation rejected that token (it may be expired -- grab a fresh one)."
         )
     location = resp.headers.get("location", "")
     if "code=" not in location:
+        logger.warning("portal: 302 had no code in Location=%s", location[:200])
         raise LinkError("PlayStation didn't return a login code. Try a fresh token.")
     code = location.split("code=")[1].split("&")[0]
 
+    # Step 2: authorization code -> access + refresh tokens.
     with httpx.Client(timeout=15) as client:
         resp = client.post(
             TOKEN_URL,
@@ -116,7 +124,12 @@ def _exchange_npsso(npsso: str) -> dict:
             },
         )
     if resp.status_code != 200:
-        raise LinkError("Couldn't complete PlayStation login. Try again.")
+        logger.warning(
+            "portal: token-exchange step failed %d; body=%s",
+            resp.status_code,
+            resp.text[:300],
+        )
+        raise LinkError("Couldn't complete PlayStation login. Try a fresh token.")
     return resp.json()
 
 
@@ -139,8 +152,17 @@ def _fetch_profile(access_token: str) -> dict:
     return {"online_id": None, "account_id": None}
 
 
-def link_user(raw_npsso: str) -> dict:
+def _safe_key(value: str) -> str:
+    """Filesystem-safe file stem from a username/id."""
+    return "".join(c for c in value if c.isalnum() or c in "-_.").lower() or "user"
+
+
+def link_user(raw_npsso: str, mm_username: str = "") -> dict:
     """Validate an NPSSO, mint tokens, detect the account, persist per-user.
+
+    ``mm_username`` ties the PSN link to a known Mattermost person. When given,
+    the record is keyed by that username (stable, human-readable) so re-linking
+    the same person overwrites rather than duplicating.
 
     Returns a small summary dict for the UI. Raises LinkError on any failure
     with a friendly message.
@@ -153,15 +175,21 @@ def link_user(raw_npsso: str) -> dict:
     account_id = profile.get("account_id")
     online_id = profile.get("online_id")
 
-    # Fall back to a stable key if the profile lookup was blocked, so we never
-    # lose a successfully-minted token.
-    key = str(account_id) if account_id else f"unknown-{int(time.time())}"
+    # Key preference: chosen Mattermost user > PSN account id > timestamp.
+    # This keeps the file tied to the real person and idempotent on re-link.
+    if mm_username:
+        key = _safe_key(mm_username)
+    elif account_id:
+        key = str(account_id)
+    else:
+        key = f"unknown-{int(time.time())}"
 
     expires_in = token_data.get("expires_in", 3600)
     refresh_expires_in = token_data.get("refresh_token_expires_in", 7776000)
     now = time.time()
 
     record = {
+        "mm_username": mm_username or None,
         "online_id": online_id,
         "account_id": account_id,
         "npsso": npsso,
@@ -174,9 +202,14 @@ def link_user(raw_npsso: str) -> dict:
 
     USERS_DIR.mkdir(parents=True, exist_ok=True)
     (USERS_DIR / f"{key}.json").write_text(json.dumps(record, indent=2))
-    logger.info("portal: linked user online_id=%s account_id=%s", online_id, account_id)
+    logger.info(
+        "portal: linked mm=%s online_id=%s account_id=%s",
+        mm_username or "-",
+        online_id,
+        account_id,
+    )
 
-    return {"online_id": online_id, "account_id": account_id}
+    return {"online_id": online_id, "account_id": account_id, "mm_username": mm_username}
 
 
 def list_users() -> list[dict]:
@@ -191,6 +224,7 @@ def list_users() -> list[dict]:
             continue
         out.append(
             {
+                "mm_username": d.get("mm_username"),
                 "online_id": d.get("online_id"),
                 "account_id": d.get("account_id"),
                 "linked_at": d.get("linked_at"),
@@ -198,3 +232,39 @@ def list_users() -> list[dict]:
             }
         )
     return out
+
+
+def mattermost_usernames() -> list[str]:
+    """Fetch active team members' usernames for the portal dropdown.
+
+    Uses MATTERMOST_URL/TOKEN/TEAM_NAME from the env. Returns [] if not
+    configured or on any error (the portal still works with a free-text field).
+    """
+    import os
+
+    base = (os.environ.get("MATTERMOST_URL") or "").rstrip("/")
+    token = os.environ.get("MATTERMOST_TOKEN") or ""
+    team = os.environ.get("MATTERMOST_TEAM_NAME") or ""
+    if not (base and token and team):
+        return []
+    # Bots we don't want in the human picker.
+    skip = {"slapper", "slaptastic", "themoosecompany"}
+    headers = {"Authorization": f"Bearer {token}"}
+    try:
+        with httpx.Client(timeout=15) as client:
+            tr = client.get(f"{base}/api/v4/teams/name/{team}", headers=headers)
+            if tr.status_code != 200:
+                return []
+            tid = tr.json().get("id")
+            ur = client.get(
+                f"{base}/api/v4/users",
+                params={"in_team": tid, "per_page": "200", "active": "true"},
+                headers=headers,
+            )
+            if ur.status_code != 200:
+                return []
+            names = [u.get("username") for u in ur.json() if u.get("username")]
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("portal: mattermost user list failed: %s", exc)
+        return []
+    return sorted(n for n in names if n and n.lower() not in skip)

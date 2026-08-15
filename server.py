@@ -209,7 +209,7 @@ import portal as portal_mod
 def _portal_page(error: str = "", ok: str = "") -> str:
     """Render the single-page portal. Passcode gate is enforced server-side on
     submit; the gate field simply travels with the form."""
-    from portal import NPSSO_TOKEN_URL, PSN_LOGIN_URL
+    from portal import NPSSO_TOKEN_URL, PSN_LOGIN_URL, mattermost_usernames
 
     banner = ""
     if ok:
@@ -222,6 +222,23 @@ def _portal_page(error: str = "", ok: str = "") -> str:
         if PORTAL_PASSCODE
         else ""
     )
+    # "Who are you?" dropdown of Mattermost users, so each link ties to a person
+    # (like the Apple Music re-link page). Falls back to a text field if the
+    # user list can't be fetched.
+    names = mattermost_usernames()
+    if names:
+        opts = '<option value="" disabled selected>Select your name…</option>' + "".join(
+            f'<option value="{n}">{n}</option>' for n in names
+        )
+        who_field = (
+            '<label>Who are you? (Mattermost)</label>'
+            f'<select name="mm_username" required>{opts}</select>'
+        )
+    else:
+        who_field = (
+            '<label>Who are you? (Mattermost username)</label>'
+            '<input name="mm_username" placeholder="your mattermost username" required>'
+        )
     return f"""<!doctype html>
 <html lang="en"><head>
 <meta charset="utf-8">
@@ -244,7 +261,7 @@ def _portal_page(error: str = "", ok: str = "") -> str:
   a.psn {{ background:#0070d1; color:#fff; }}
   a.token {{ background:#1c2947; color:#cfe0ff; border:1px solid #2f4570; }}
   label {{ display:block; font-size:12px; color:#9aa7c4; margin:14px 0 6px; }}
-  input, textarea {{ width:100%; padding:11px; border-radius:10px; border:1px solid #2c3a5c;
+  input, textarea, select {{ width:100%; padding:11px; border-radius:10px; border:1px solid #2c3a5c;
     background:#0e1526; color:#e9edf5; font-size:14px; }}
   textarea {{ min-height:70px; resize:vertical; font-family:ui-monospace,monospace; }}
   button.link {{ background:#22c55e; color:#04210f; margin-top:14px; }}
@@ -268,6 +285,7 @@ def _portal_page(error: str = "", ok: str = "") -> str:
   <a class="btn token" href="{NPSSO_TOKEN_URL}" target="_blank" rel="noopener">2 · Get my token</a>
   <form method="post" action="/portal/link" id="f">
     {passcode_field}
+    {who_field}
     <label>3 · Paste your token here</label>
     <textarea name="npsso" id="npsso" placeholder='{{"npsso":"..."}} or just the value' required></textarea>
     <div class="hint">Tip: paste the whole <code>{{"npsso":"..."}}</code> line — we'll sort it out.</div>
@@ -291,11 +309,15 @@ def portal_home():
 
 
 @app.post("/portal/link", response_class=HTMLResponse)
-def portal_link(npsso: str = Form(...), passcode: str = Form("")):
+def portal_link(
+    npsso: str = Form(...),
+    passcode: str = Form(""),
+    mm_username: str = Form(""),
+):
     if PORTAL_PASSCODE and passcode != PORTAL_PASSCODE:
         return HTMLResponse(_portal_page(error="Wrong passcode."), status_code=403)
     try:
-        result = portal_mod.link_user(npsso)
+        result = portal_mod.link_user(npsso, mm_username=mm_username.strip())
     except portal_mod.LinkError as e:
         return HTMLResponse(_portal_page(error=str(e)), status_code=400)
     except Exception as e:  # noqa: BLE001
@@ -304,7 +326,7 @@ def portal_link(npsso: str = Form(...), passcode: str = Form("")):
             _portal_page(error="Something went wrong. Try a fresh token."),
             status_code=500,
         )
-    who = result.get("online_id") or "your account"
+    who = result.get("online_id") or result.get("mm_username") or "your account"
     return HTMLResponse(
         _portal_page(ok=f"{who} is linked! You're all set — nothing else to do.")
     )
