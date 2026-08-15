@@ -19,6 +19,7 @@ from __future__ import annotations
 
 import json
 import logging
+import re
 import time
 from pathlib import Path
 
@@ -67,16 +68,33 @@ class LinkError(Exception):
 
 
 def _normalize_npsso(raw: str) -> str:
-    """Accept either the bare token or the full {"npsso":"..."} JSON blob."""
+    """Extract the NPSSO from whatever the user pasted.
+
+    Friends paste all sorts of shapes from the token page: the bare token, the
+    full ``{"npsso":"...","expires_in":...}`` blob, or a partial fragment like
+    ``"npsso":"...","expires_in":...}`` (no leading brace). Handle them all by
+    pulling the value out of any ``"npsso":"..."`` pattern first, then falling
+    back to treating the input as the bare token.
+    """
     raw = (raw or "").strip()
     if not raw:
         raise LinkError("No token provided.")
-    # Friends often paste the whole JSON from the token page -- handle both.
-    if raw.startswith("{"):
+
+    # 1) Any paste that mentions npsso -> grab the quoted value after it. This
+    #    covers full JSON, brace-less fragments, and stray trailing fields.
+    m = re.search(r'"?npsso"?\s*:\s*"([^"]+)"', raw)
+    if m:
+        raw = m.group(1).strip()
+    # 2) Clean JSON object without the regex hit (rare) -> parse it.
+    elif raw.startswith("{"):
         try:
-            raw = json.loads(raw).get("npsso", "").strip()
+            raw = str(json.loads(raw).get("npsso", "")).strip()
         except Exception as exc:  # noqa: BLE001
             raise LinkError("That doesn't look like a valid token.") from exc
+    # 3) Otherwise assume the input IS the bare token (strip stray quotes).
+    else:
+        raw = raw.strip('"').strip()
+
     if not raw or len(raw) < 40:
         raise LinkError("That doesn't look like a valid NPSSO token.")
     return raw
