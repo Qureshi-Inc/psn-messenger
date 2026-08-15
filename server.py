@@ -595,6 +595,43 @@ def _set_gate_cookie(resp) -> None:
     )
 
 
+# --- Site-wide passcode enforcement -----------------------------------------
+#
+# Every public request must be unlocked. We reuse the same cookie gate above and
+# apply it to ALL routes via one middleware, so the dashboard, /api/squad, etc.
+# are no longer world-readable. Two carve-outs:
+#   * OPEN_PATHS: the unlock form + container healthcheck must work pre-unlock.
+#   * Direct LAN/Tailscale IP access (the Stream Deck buttons) bypasses the gate
+#     -- those hosts are already network-restricted and carry no cookie.
+_OPEN_PATHS = {"/portal/unlock", "/health"}
+
+# The only public hostname; anything else (bare IPs from the tailnet/LAN) is a
+# trusted direct hit and skips the gate.
+_PUBLIC_HOST = os.environ.get("PORTAL_PUBLIC_HOST", "psn.qureshi.io")
+
+
+@app.middleware("http")
+async def _passcode_gate(request: Request, call_next):
+    if not PORTAL_PASSCODE:
+        return await call_next(request)
+
+    path = request.url.path
+    if path in _OPEN_PATHS or _is_unlocked(request):
+        return await call_next(request)
+
+    # Requests that don't arrive on the public hostname are direct IP hits from
+    # the tailnet/LAN (e.g. Stream Deck) -- let them through.
+    host = (request.headers.get("host") or "").split(":")[0]
+    if host != _PUBLIC_HOST:
+        return await call_next(request)
+
+    # Locked: show the gate for browser navigations, 403 for anything else.
+    accept = request.headers.get("accept", "")
+    if request.method == "GET" and "text/html" in accept:
+        return HTMLResponse(_gate_page(), status_code=401)
+    return JSONResponse({"detail": "passcode required"}, status_code=401)
+
+
 @app.get("/portal", response_class=HTMLResponse)
 def portal_home(request: Request):
     if not _is_unlocked(request):
