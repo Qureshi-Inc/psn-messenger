@@ -1007,7 +1007,7 @@ _DASHBOARD_TMPL = r"""<!doctype html>
     text-shadow:0 0 10px rgba(34,230,255,.4); }
   .board-title .chev { transition:transform .25s ease; font-size:13px; }
   .board { display:grid; grid-template-columns:repeat(3,1fr); gap:8px;
-    max-height:30vh; overflow-y:auto; -webkit-overflow-scrolling:touch;
+    max-height:52vh; overflow-y:auto; -webkit-overflow-scrolling:touch;
     transition:max-height .28s ease, opacity .2s ease, margin .28s ease; }
   /* collapsed: hide the buttons grid, keep title + quick-send visible */
   .board-wrap.collapsed .board { max-height:0; opacity:0; overflow:hidden;
@@ -1092,6 +1092,7 @@ _DASHBOARD_TMPL = r"""<!doctype html>
   @keyframes pulse { 50% { box-shadow:0 0 3px var(--lime); opacity:.55; } }
   .game-badge { color:var(--lime); font-weight:600; text-shadow:0 0 8px rgba(140,255,43,.4); }
   .game-badge b { color:#eaffd4; }
+  .lastgame { color:#8a7db0; }
   .troph { display:flex; gap:9px; align-items:center; flex:none; }
   .lvl { text-align:center; }
   .lvl .v { font-size:18px; font-weight:800; line-height:1; font-family:"Orbitron",sans-serif;
@@ -1101,6 +1102,31 @@ _DASHBOARD_TMPL = r"""<!doctype html>
   .lvl .k { font-size:9px; color:var(--dim); letter-spacing:.5px; }
   .tcount { font-size:11.5px; color:var(--dim); text-align:right; line-height:1.5; }
   .tcount .p { color:var(--cyan); font-weight:700; }
+
+  /* "playing together" hype banner */
+  .together { display:flex; align-items:center; gap:12px; margin-bottom:14px;
+    padding:14px 16px; border-radius:16px; cursor:pointer;
+    background:linear-gradient(135deg,rgba(140,255,43,.16),rgba(34,230,255,.1));
+    border:1px solid rgba(140,255,43,.5); box-shadow:0 0 24px rgba(140,255,43,.25);
+    animation:fade .4s ease both; }
+  .together .gicon2 { width:46px; height:46px; border-radius:11px; object-fit:cover; flex:none;
+    border:1px solid rgba(255,255,255,.2); }
+  .together .t-main { flex:1; min-width:0; }
+  .together .t-title { font-family:"Orbitron",sans-serif; font-weight:800; font-size:14px;
+    color:#eaffd4; text-shadow:0 0 10px rgba(140,255,43,.5); }
+  .together .t-sub { font-size:12.5px; color:var(--dim); margin-top:2px; }
+  .together .t-go { font-size:11px; font-weight:700; color:#04210f; padding:8px 12px;
+    border-radius:10px; background:linear-gradient(135deg,var(--lime),var(--cyan)); flex:none;
+    text-transform:uppercase; letter-spacing:.5px; }
+  /* squad stat tiles */
+  .statgrid { display:grid; grid-template-columns:repeat(3,1fr); gap:9px; margin-bottom:14px; }
+  .stile { background:var(--card); border:1px solid var(--line); border-radius:14px;
+    padding:12px 8px; text-align:center; backdrop-filter:blur(14px); }
+  .stile .sv { font-family:"Orbitron",sans-serif; font-size:19px; font-weight:800; line-height:1;
+    background:linear-gradient(135deg,var(--cyan),var(--neon));
+    -webkit-background-clip:text; background-clip:text; color:transparent; }
+  .stile .sl { font-size:9.5px; color:var(--dim); margin-top:6px; letter-spacing:.6px;
+    text-transform:uppercase; }
 
   .lb-row { display:flex; align-items:center; gap:13px; padding:13px 4px;
     border-bottom:1px solid rgba(255,255,255,.05); }
@@ -1131,6 +1157,8 @@ _DASHBOARD_TMPL = r"""<!doctype html>
     <button class="tab on" data-p="squad" onclick="tab(this)">Squad</button>
     <button class="tab" data-p="lb" onclick="tab(this)">🏆 Leaderboard</button>
   </div>
+  <div id="together"></div>
+  <div class="statgrid" id="statgrid"></div>
   <div class="panel on" id="p-squad"><div class="card" id="squad"><div class="spin">Loading squad…</div></div></div>
   <div class="panel" id="p-lb"><div class="card" id="lb"><div class="spin">Loading leaderboard…</div></div></div>
   <p style="text-align:center;margin:16px 0"><a class="link-cta" href="/portal">＋ Link your PlayStation account</a></p>
@@ -1287,11 +1315,9 @@ function renderSquad(){
     let st;
     if(m.playing) st='<span class="game-badge">Playing <b>'+esc(m.game)+'</b></span>';
     else if(m.online) st='Online'+(m.platform?' · '+esc(m.platform):'');
-    // Offline: the gamelist lastPlayedDateTime (recent_played_at) is accurate;
-    // the presence lastOnlineDate is stale, so prefer the former.
-    else if(m.recent_game) st='Last seen '+fmtLast(m.recent_played_at||m.last_online)+
-      ' · '+esc(m.recent_game);
-    else st='Last online '+fmtLast(m.last_online);
+    // Offline: just show their last game (no timestamps / "last online").
+    else if(m.recent_game) st='<span class="lastgame">'+esc(m.recent_game)+'</span>';
+    else st='<span class="lastgame">—</span>';
     const mm=m.mm_username?'<span class="mm">@'+esc(m.mm_username)+'</span>':'';
     const cls=m.playing?'on playing':(m.online?'on':'');
     return '<div class="row '+cls+'">'+avImg+'<div class="who"><div class="name"><span class="dot"></span>'+name+mm+'</div>'+
@@ -1314,13 +1340,52 @@ function renderBoard(){
       '<div class="bar"><i style="width:'+Math.round((m.trophy_level/max)*100)+'%"></i></div></div></div>';
   }).join('');
 }
+// "Playing together": if 2+ people are on the SAME game right now, hype it +
+// let you rally the group into it with one tap.
+function renderTogether(){
+  const el=$('together'); el.innerHTML='';
+  const counts={};
+  SQUAD.filter(m=>m.playing && m.game).forEach(m=>{
+    (counts[m.game]=counts[m.game]||{n:0,icon:m.game_icon,who:[]});
+    counts[m.game].n++; counts[m.game].who.push(m.online_id||m.mm_username);
+  });
+  const top=Object.entries(counts).filter(([g,d])=>d.n>=2)
+    .sort((a,b)=>b[1].n-a[1].n)[0];
+  if(!top) return;
+  const [game,d]=top;
+  const icon=d.icon?'<img class="gicon2" src="'+esc(d.icon)+'">':'';
+  el.innerHTML='<div class="together" onclick="rally('+JSON.stringify(game).replace(/"/g,'&quot;')+')">'+
+    icon+'<div class="t-main"><div class="t-title">🔥 '+d.n+' in '+esc(game)+'</div>'+
+    '<div class="t-sub">'+esc(d.who.join(', '))+' — squad\'s live!</div></div>'+
+    '<div class="t-go">Rally ▶</div></div>';
+}
+async function rally(game){
+  try {
+    const r=await fetch('/v2/squad',{method:'POST',headers:{'Content-Type':'application/json'},
+      body:JSON.stringify({message:'🎮🔥 Squad\'s on '+game+'! Who else is hopping in? 💥'})});
+    toast(r.ok?'Rallied! 🎮':'Failed');
+  } catch(e){ toast('Network error'); }
+}
+function renderStats(){
+  const el=$('statgrid');
+  const plat=SQUAD.reduce((a,m)=>a+(m.platinum||0),0);
+  const lvls=SQUAD.filter(m=>m.trophy_level!=null).map(m=>m.trophy_level);
+  const topLvl=lvls.length?Math.max(...lvls):0;
+  // most common recent game across the squad
+  const g={}; SQUAD.forEach(m=>{ const n=m.game||m.recent_game; if(n) g[n]=(g[n]||0)+1; });
+  const fav=Object.entries(g).sort((a,b)=>b[1]-a[1])[0];
+  el.innerHTML=
+    '<div class="stile"><div class="sv">'+plat+'</div><div class="sl">⚪ Platinums</div></div>'+
+    '<div class="stile"><div class="sv">'+topLvl+'</div><div class="sl">🏆 Top Level</div></div>'+
+    '<div class="stile"><div class="sv" style="font-size:13px">'+(fav?esc(fav[0]).slice(0,14):'—')+'</div><div class="sl">🎯 Squad Fav</div></div>';
+}
 async function loadSquad(){
   try {
     const {squad=[]}=await (await fetch('/api/squad')).json();
     SQUAD=squad;
     const playing=squad.filter(m=>m.playing).length, online=squad.filter(m=>m.online).length;
     $('livecount').innerHTML = squad.length ? ('<b>'+online+'</b> online'+(playing?' · '+playing+' 🎮':'')) : '';
-    renderSquad(); renderBoard();
+    renderTogether(); renderStats(); renderSquad(); renderBoard();
   } catch(e){ $('squad').innerHTML='<div class="empty">Couldn\'t load squad.</div>'; }
 }
 loadSquad(); setInterval(loadSquad, 30000);
