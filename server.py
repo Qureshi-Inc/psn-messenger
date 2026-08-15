@@ -907,7 +907,19 @@ _DASHBOARD_TMPL = r"""<!doctype html>
   .board-title { font-size:11px; letter-spacing:1.5px; color:var(--dim);
     text-transform:uppercase; margin:0 4px 8px; font-weight:700; }
   .board { display:grid; grid-template-columns:repeat(3,1fr); gap:8px;
-    max-height:38vh; overflow-y:auto; }
+    max-height:34vh; overflow-y:auto; }
+  /* ad-hoc quick-send row -- for one-off messages so people don't make buttons */
+  .quick { display:flex; gap:8px; margin-top:10px; }
+  .quick input { flex:1; padding:13px 15px; border-radius:13px; font-size:15px;
+    border:1px solid rgba(140,160,255,.22); background:rgba(6,11,24,.7); color:var(--txt);
+    -webkit-appearance:none; }
+  .quick input:focus { outline:none; border-color:var(--psn2);
+    box-shadow:0 0 0 3px rgba(0,163,255,.22); }
+  .qsend { flex:none; width:52px; border:none; border-radius:13px; font-size:18px;
+    color:#fff; cursor:pointer; background:linear-gradient(135deg,var(--psn),var(--accent));
+    box-shadow:0 6px 18px rgba(0,112,209,.4); transition:transform .07s, filter .12s; }
+  .qsend:active { transform:scale(.94); } .qsend:hover { filter:brightness(1.12); }
+  .qsend:disabled { opacity:.5; }
   .snd { border:none; border-radius:14px; padding:14px 8px; font-size:12.5px;
     font-weight:700; cursor:pointer; color:#fff; line-height:1.25; min-height:58px;
     display:flex; align-items:center; justify-content:center; text-align:center;
@@ -999,6 +1011,12 @@ _DASHBOARD_TMPL = r"""<!doctype html>
 <div class="board-wrap">
   <div class="board-title">🔊 Soundboard — tap to send</div>
   <div class="board" id="board"></div>
+  <div class="quick">
+    <input id="quick" type="text" placeholder="Send a quick message to the squad…"
+      maxlength="200" autocomplete="off"
+      onkeydown="if(event.key==='Enter')sendQuick()">
+    <button class="qsend" onclick="sendQuick()" aria-label="Send">➤</button>
+  </div>
 </div>
 <div class="toast" id="toast"></div>
 <script>
@@ -1028,6 +1046,21 @@ async function fire(el){
       body:JSON.stringify({message:b.msg})}); }
     toast(r.ok ? 'Sent! 🎮' : 'Failed ('+r.status+')');
   } catch(e){ toast('Network error'); }
+}
+// Ad-hoc one-off message -> sent as-is to the group (not saved, no AI).
+async function sendQuick(){
+  const inp = $('quick'), btn = document.querySelector('.qsend');
+  const msg = (inp.value||'').trim();
+  if(!msg) return;
+  btn.disabled = true;
+  try {
+    const r = await fetch('/v2/squad',{method:'POST',headers:{'Content-Type':'application/json'},
+      body:JSON.stringify({message:msg})});
+    if(r.ok){ inp.value=''; toast('Sent! 🎮'); }
+    else if(r.status===429){ toast('Slow down a sec ⏳'); }
+    else toast('Failed ('+r.status+')');
+  } catch(e){ toast('Network error'); }
+  btn.disabled = false;
 }
 async function openCustom(){
   const text = prompt("What should the button say? The AI will add the flavor 🔥");
