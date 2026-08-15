@@ -207,9 +207,20 @@ async def roast_loop():
     logger.info("Roast bot stopped")
 
 
+# The automatic roast loop is DISABLED by default -- it was firing periodic
+# roasts (sometimes doubling up) that weren't wanted. Set ROAST_AUTO_ENABLED=1
+# to re-enable the scheduled loop; otherwise start() is a no-op.
+import os as _os
+
+ROAST_AUTO_ENABLED = _os.environ.get("ROAST_AUTO_ENABLED", "0") == "1"
+
+
 def start():
-    """Start the roast loop."""
+    """Start the roast loop (only if explicitly enabled via env)."""
     global _running, _task
+    if not ROAST_AUTO_ENABLED:
+        logger.info("Roast auto-loop is disabled (ROAST_AUTO_ENABLED != 1)")
+        return False
     if _running:
         return False
     _running = True

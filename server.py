@@ -827,7 +827,6 @@ _SOUNDBOARD_DEFAULTS = [
     {"label": "🎬 Zubi Clip It", "msg": "🎬 ZUBI CLIP IT!! 📸🔥 That was insane!", "cls": "c5"},
     {"label": "🎮 Squad Up", "msg": "🎮🔥 SQUAD UP! Who's hopping on? 🕹️💥", "cls": "c1"},
     {"label": "🕹️ Game Time", "msg": "🎮🔥 Let's party up y'all. It's GAME TIME! 🕹️💥", "cls": "c2"},
-    {"label": "🔥 Roast Now", "path": "/roast/once", "cls": "roast"},
 ]
 
 from pathlib import Path as _Path
