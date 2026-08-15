@@ -258,7 +258,7 @@ def _trophy_summary(client: httpx.Client, token: str, account_id: str, own: bool
 # lastPlayedDateTime updates in real time (verified: shows the current game with
 # a "seconds ago" timestamp even when presence says offline). With the
 # per-minute background poll, a tight window closely tracks "online right now".
-RECENT_PLAY_WINDOW_SEC = 4 * 60
+RECENT_PLAY_WINDOW_SEC = 20 * 60
 
 
 def _recent_game(client: httpx.Client, token: str) -> dict:
