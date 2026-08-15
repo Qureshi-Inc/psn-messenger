@@ -25,9 +25,15 @@ USERS_DIR = Path("/data/users")
 # from a shared cache so that no matter how many people/tabs open the dashboard
 # (each polling every 30s), PSN is queried at most once per CACHE_TTL. A lock
 # ensures concurrent viewers coalesce onto a single refresh instead of stampeding.
-CACHE_TTL = 60.0  # seconds; one real PSN sweep per minute, max
+CACHE_TTL = 55.0  # seconds; one real PSN sweep per ~minute, max
 _cache: dict = {"at": 0.0, "data": None}
 _cache_lock = threading.Lock()
+
+# Trophy summaries + avatars barely change, so we cache them per-account for a
+# long TTL. That way the per-minute presence poll only makes the light
+# presence+gamelist calls, keeping total PSN load low.
+_SLOW_TTL = 30 * 60  # 30 min
+_slow_cache: dict = {}  # account_id -> {"at": ts, "trophy": {...}, "avatar": str}
 
 API = "https://m.np.playstation.com/api/userProfile/v1/internal/users"
 PROFILE2 = "https://us-prof.np.community.playstation.net/userProfile/v1/users"
@@ -250,8 +256,9 @@ def _trophy_summary(client: httpx.Client, token: str, account_id: str, own: bool
 # If a title was last played within this window we treat the person as actively
 # playing it -- the presence API lags/hides console state, but the game list's
 # lastPlayedDateTime updates in real time (verified: shows the current game with
-# a "seconds ago" timestamp even when presence says offline).
-RECENT_PLAY_WINDOW_SEC = 15 * 60
+# a "seconds ago" timestamp even when presence says offline). With the
+# per-minute background poll, a tight window closely tracks "online right now".
+RECENT_PLAY_WINDOW_SEC = 4 * 60
 
 
 def _recent_game(client: httpx.Client, token: str) -> dict:
@@ -343,11 +350,22 @@ def _squad_status_uncached(auth, include_stats: bool = True) -> list[dict]:
             entry = {k: v for k, v in a.items() if not k.startswith("_")}
             entry.update(pres)
             entry["linked"] = own
-            entry["avatar"] = _avatar(client, bot_token, a.get("online_id"))
-            if include_stats:
-                entry.update(_trophy_summary(client, tok, a["account_id"], own))
-                if own:
-                    entry.update(_recent_game(client, tok))
+            # Trophy + avatar from the slow cache (30 min) so the per-minute
+            # poll doesn't re-fetch them every time.
+            slow = _slow_cache.get(a["account_id"])
+            if not slow or (time.time() - slow["at"]) > _SLOW_TTL:
+                slow = {
+                    "at": time.time(),
+                    "avatar": _avatar(client, bot_token, a.get("online_id")),
+                    "trophy": _trophy_summary(client, tok, a["account_id"], own)
+                    if include_stats else {},
+                }
+                _slow_cache[a["account_id"]] = slow
+            entry["avatar"] = slow["avatar"]
+            entry.update(slow["trophy"])
+            # Presence + current game are cheap and time-sensitive: always fresh.
+            if own:
+                entry.update(_recent_game(client, tok))
             # The presence API often reports "offline" even while someone is in
             # a game (esp. cross-play titles). The game list's lastPlayedDateTime
             # is real-time, so if they played within the recent window we treat

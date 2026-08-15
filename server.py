@@ -735,6 +735,37 @@ def portal_users(key: str = ""):
 import psn_data
 
 
+# Background poller: refresh the squad cache every minute so online/playing
+# status stays live even when nobody has the dashboard open, and so the game
+# list's real-time lastPlayedDateTime is checked frequently enough to reflect
+# "online right now". This is the ONLY periodic PSN caller; viewers read cache.
+_poller_started = False
+
+
+@app.on_event("startup")
+async def _start_squad_poller():
+    global _poller_started
+    if _poller_started or not _v2_available:
+        return
+    _poller_started = True
+
+    import asyncio
+
+    async def _loop():
+        while True:
+            try:
+                # Force a real refresh by bypassing the freshness check: reset
+                # the cache timestamp so squad_status re-sweeps, then call it.
+                psn_data._cache["at"] = 0.0
+                await asyncio.to_thread(psn_data.squad_status, psn_auth)
+            except Exception as e:  # noqa: BLE001
+                logger.debug("squad poller tick failed: %s", e)
+            await asyncio.sleep(60)
+
+    asyncio.create_task(_loop())
+    logger.info("squad presence poller started (60s)")
+
+
 @app.get("/api/squad")
 def api_squad():
     """Live presence + trophy stats for every squad member (JSON, for the UI)."""
