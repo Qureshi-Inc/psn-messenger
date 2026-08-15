@@ -743,38 +743,41 @@ _poller_started = False
 
 import mattermost as mm_client
 
-# ARC Raiders alert: when a squad member STARTS playing it, post to the
-# "Squad Alerts" Mattermost channel. Match is substring/case-insensitive.
+# ARC Raiders alert: when someone starts playing it, post ONE message to the
+# "Squad Alerts" Mattermost channel tagging the crew. Match is
+# substring/case-insensitive. Mentions must use real MM usernames to ping.
 _ARC_MATCH = "arc raider"
 _SQUAD_ALERTS_CHANNEL = os.environ.get(
     "SQUAD_ALERTS_CHANNEL_ID", "5115wy8pc7ffuj5c3zor51jxew"
 )
-# Track who we've already alerted for (edge detection) so we post once per
-# session, not every minute. A player drops from the set when they stop.
-_arc_playing: set[str] = set()
+_ARC_TAGS = "@themoosecompany @zubair221b @deception @moiz"
+# Single-shot edge flag: True while at least one person is on ARC. We alert once
+# on the 0->1 transition and don't alert again until it drops back to 0.
+_arc_alerted = False
 
 
 def _check_arc_alert(squad: list[dict]) -> None:
-    """Post to Squad Alerts when someone newly starts playing ARC Raiders."""
+    """Post ONE tagging message to Squad Alerts when ARC play starts."""
+    global _arc_alerted
     if not mm_client.available():
         return
-    now_playing = {
+    playing = [
         m.get("online_id")
         for m in squad
         if m.get("playing") and _ARC_MATCH in (m.get("game") or "").lower()
-    }
-    started = now_playing - _arc_playing
-    for player in started:
+    ]
+    if playing and not _arc_alerted:
+        who = ", ".join(p for p in playing if p) or "Someone"
         msg = (
-            f"🎮🔫 **{player}** just hopped on **ARC Raiders**! "
-            "Squad up — who's in? 💥"
+            f"🎮🔫 **{who}** is on **ARC Raiders**! Squad up — who's in? 💥\n"
+            f"{_ARC_TAGS}"
         )
         ok = mm_client.post_channel(_SQUAD_ALERTS_CHANNEL, msg)
-        logger.info("arc alert: %s started ARC Raiders -> posted=%s", player, ok)
-    # Reset the tracking set to whoever is currently playing (so a stop->start
-    # later re-alerts, but continuous play doesn't).
-    _arc_playing.clear()
-    _arc_playing.update(now_playing)
+        logger.info("arc alert: %s on ARC -> posted=%s", who, ok)
+        _arc_alerted = True
+    elif not playing:
+        # Nobody on ARC anymore -> re-arm for the next session.
+        _arc_alerted = False
 
 
 @app.on_event("startup")
