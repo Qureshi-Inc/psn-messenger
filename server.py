@@ -751,15 +751,23 @@ _SQUAD_ALERTS_CHANNEL = os.environ.get(
     "SQUAD_ALERTS_CHANNEL_ID", "5115wy8pc7ffuj5c3zor51jxew"
 )
 _ARC_TAGS = "@themoosecompany @zubair221b @deception @moiz"
-# Single-shot edge flag: True while at least one person is on ARC. We alert once
-# on the 0->1 transition and don't alert again until it drops back to 0.
+# DISABLED: the auto ARC alert fired at the WRONG time. PSN's gamelist
+# lastPlayedDateTime only updates when a session SYNCS (i.e. when someone stops
+# / switches away), so "playing" flips true right as they LEAVE ARC -- the alert
+# announced arrivals that were actually departures. There's no reliable live
+# "just started" signal in the data, so we don't auto-ping. Set
+# ARC_ALERT_ENABLED=1 to re-enable (not recommended).
+ARC_ALERT_ENABLED = os.environ.get("ARC_ALERT_ENABLED", "0") == "1"
 _arc_alerted = False
 
 
 def _check_arc_alert(squad: list[dict]) -> None:
-    """Post ONE tagging message to Squad Alerts when ARC play starts."""
+    """Post ONE tagging message to Squad Alerts when ARC play starts.
+
+    No-op unless ARC_ALERT_ENABLED -- see note above on why this misfires.
+    """
     global _arc_alerted
-    if not mm_client.available():
+    if not ARC_ALERT_ENABLED or not mm_client.available():
         return
     playing = [
         m.get("online_id")
@@ -776,7 +784,6 @@ def _check_arc_alert(squad: list[dict]) -> None:
         logger.info("arc alert: %s on ARC -> posted=%s", who, ok)
         _arc_alerted = True
     elif not playing:
-        # Nobody on ARC anymore -> re-arm for the next session.
         _arc_alerted = False
 
 
