@@ -82,3 +82,19 @@ class PSNMessenger:
         with httpx.Client(timeout=15) as client:
             resp = client.get(url, params=params, headers=self._headers)
         return {"status": resp.status_code, "body": resp.json() if resp.status_code == 200 else resp.text}
+
+    def get_message_reactions(self, message_uid: str) -> dict:
+        """Try per-message reactions endpoint."""
+        # Try two known URL patterns for per-message reactions
+        base = PSN_MESSAGING_BASE
+        urls = [
+            f"{base}/members/me/groups/{self._group_id}/threads/{self._group_id}/messages/{message_uid}/reactions",
+            f"{base}/groups/{self._group_id}/threads/{self._group_id}/messages/{message_uid}/reactions",
+            f"{base}/members/me/groups/{self._group_id}/threads/{self._group_id}/messages/{message_uid}",
+        ]
+        results = {}
+        with httpx.Client(timeout=10) as client:
+            for url in urls:
+                r = client.get(url, headers=self._headers)
+                results[url.split("/v1/")[1]] = {"status": r.status_code, "body": r.text[:500]}
+        return results

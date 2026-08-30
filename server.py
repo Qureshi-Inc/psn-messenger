@@ -880,6 +880,20 @@ def _fetch_messages_for_reactions(limit: int = 10) -> list[dict]:
     return [_msg_to_dict(m) for m in raw]
 
 
+@app.get("/api/reactions/probe")
+def api_reactions_probe(uid: str = ""):
+    """Probe per-message reactions endpoint for a given messageUid."""
+    if not _v2_available:
+        return {"error": "v2 not available"}
+    if not uid:
+        # auto-pick the most recent message uid
+        msgs = psn_messenger.get_messages(1)
+        uid = msgs[0]["timestamp"] if msgs else ""
+    if not uid:
+        return {"error": "no uid"}
+    return psn_messenger.get_message_reactions(uid)
+
+
 @app.get("/api/reactions/debug")
 def api_reactions_debug():
     """Debug: show raw messages + reaction state (no caching, no side-effects)."""
