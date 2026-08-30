@@ -850,91 +850,32 @@ def api_squad():
         return JSONResponse({"squad": [], "error": str(e)}, status_code=500)
 
 
-def _msg_to_dict(msg) -> dict:
-    """Normalize a PSN message dict into a plain dict."""
-    sender_obj = msg.get("sender", {})
-    sender = (
-        sender_obj.get("onlineId", "unknown")
-        if isinstance(sender_obj, dict)
-        else str(sender_obj)
-    )
-    return {
-        "sender": sender,
-        "body": str(msg.get("body", "")),
-        "timestamp": str(msg.get("createdTimestamp", msg.get("messageUid", ""))),
-        "messageType": msg.get("messageType", 1),
-        "reactions": msg.get("reactions", []),
-    }
-
-
 def _fetch_messages_for_reactions(limit: int = 10) -> list[dict]:
-    """Fetch recent group messages with reactions (uses correct /members/me/ URL)."""
+    """Fetch recent group messages using v2 auth (correct /members/me/ URL)."""
     if _v2_available:
-        msgs = psn_messenger.get_messages(limit)
-        logger.info("reactions: fetched %d msgs via v2: %s", len(msgs),
-                    [(m["sender"], repr(m["body"][:20]), m.get("reactions")) for m in msgs])
-        return msgs
-    # fallback: psnawp (no reactions field)
+        return psn_messenger.get_messages(limit)
+    # fallback: psnawp
     conv = group.get_conversation(limit)
     raw = conv.get("messages", []) if isinstance(conv, dict) else list(conv)
-    return [_msg_to_dict(m) for m in raw]
-
-
-@app.get("/api/reactions/probe")
-def api_reactions_probe(uid: str = ""):
-    """Probe per-message reactions endpoint for a given messageUid."""
-    if not _v2_available:
-        return {"error": "v2 not available"}
-    if not uid:
-        # auto-pick the most recent message uid
-        msgs = psn_messenger.get_messages(1)
-        uid = msgs[0]["timestamp"] if msgs else ""
-    if not uid:
-        return {"error": "no uid"}
-    return psn_messenger.get_message_reactions(uid)
-
-
-@app.get("/api/reactions/debug")
-def api_reactions_debug():
-    """Debug: show raw messages + reaction state (no caching, no side-effects)."""
-    try:
-        messages = _fetch_messages_for_reactions(20)
-    except Exception as e:  # noqa: BLE001
-        return {"error": str(e), "initialized": _reaction_initialized, "seen_count": len(_reaction_seen)}
-    return {
-        "messages": messages,
-        "reaction_snapshot": {k: list(v) for k, v in _reaction_snapshot(messages).items()},
-        "initialized": _reaction_initialized,
-        "seen_keys": sorted(_reaction_seen),
-        "emoji_candidates": [m for m in messages if _is_emoji_only(m["body"])],
-    }
-
-
-def _reaction_snapshot(messages: list[dict]) -> dict[str, set]:
-    """Build a snapshot: messageUid -> set of reaction emoji strings seen."""
-    snap: dict[str, set] = {}
-    for m in messages:
-        uid = m["timestamp"]  # createdTimestamp or messageUid
-        rxns = m.get("reactions", [])
-        # reactions may be a list of dicts with an "emoji" or "body" key, or strings
-        emojis: set = set()
-        for r in (rxns if isinstance(rxns, list) else []):
-            if isinstance(r, dict):
-                e = r.get("emoji") or r.get("body") or r.get("emoticon") or r.get("reactionType") or ""
-                if e:
-                    emojis.add(str(e))
-            elif isinstance(r, str) and r:
-                emojis.add(r)
-        snap[uid] = emojis
-    return snap
+    msgs = []
+    for m in raw:
+        s = m.get("sender", {})
+        msgs.append({
+            "sender": s.get("onlineId", "unknown") if isinstance(s, dict) else str(s),
+            "body": str(m.get("body", "")),
+            "timestamp": str(m.get("createdTimestamp", m.get("messageUid", ""))),
+        })
+    return msgs
 
 
 @app.get("/api/reactions")
 def api_reactions():
-    """Return new emoji reactions since last poll (both emoji-only messages and PSN reactions).
+    """Return new emoji-only messages since last poll — fires confetti on the webapp.
 
-    Cached for 2 s so multiple open tabs don't each hammer the PSN API.
-    First call establishes the baseline so old reactions don't fire on startup.
+    PSN's built-in reaction button is not accessible via their API; confetti
+    fires when a squad member sends a text message that is pure emoji (e.g. 🔥).
+    Cached for 2 s to avoid hammering the PSN API from multiple open tabs.
+    First call establishes the baseline so startup doesn't replay old messages.
     """
     global _reaction_seen, _reaction_initialized, _reaction_cache
     now = _time.time()
@@ -946,36 +887,22 @@ def api_reactions():
         logger.warning("reactions: get_messages failed: %s", e)
         return {"reactions": []}
 
-    # Snapshot: message uid -> set of reaction emoji + whether we've seen the message
     msg_keys = {f"{m['sender']}:{m['timestamp']}:{m['body']}" for m in messages}
-    rxn_snap = _reaction_snapshot(messages)
 
     if not _reaction_initialized:
         _reaction_seen = msg_keys
-        _reaction_cache["rxn_snap"] = rxn_snap
         _reaction_initialized = True
         result: dict = {"reactions": []}
         _reaction_cache = {"ts": now, "data": result}
         return result
 
-    prev_rxn_snap: dict[str, set] = _reaction_cache.get("rxn_snap", {})
     new_reactions = []
-
     for msg in messages:
         key = f"{msg['sender']}:{msg['timestamp']}:{msg['body']}"
-        # New emoji-only message
         if key not in _reaction_seen and _is_emoji_only(msg["body"]):
-            new_reactions.append({"sender": msg["sender"], "emoji": msg["body"].strip(), "source": "message"})
-
-        # New emoji reactions added to an existing message
-        uid = msg["timestamp"]
-        prev_emojis = prev_rxn_snap.get(uid, set())
-        curr_emojis = rxn_snap.get(uid, set())
-        for emoji in curr_emojis - prev_emojis:
-            new_reactions.append({"sender": msg["sender"], "emoji": emoji, "source": "reaction"})
+            new_reactions.append({"sender": msg["sender"], "emoji": msg["body"].strip()})
 
     _reaction_seen = msg_keys
-    _reaction_cache["rxn_snap"] = rxn_snap
     result = {"reactions": new_reactions}
     _reaction_cache = {"ts": now, "data": result}
     return result
