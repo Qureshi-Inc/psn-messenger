@@ -860,7 +860,25 @@ def _fetch_messages_for_reactions(limit: int = 10) -> list[dict]:
             "body": str(msg.get("body", "")),
             "timestamp": str(msg.get("eventIndex", "")),
         })
+    logger.info("reactions: fetched %d messages: %s", len(messages),
+                [(m["sender"], repr(m["body"][:20])) for m in messages])
     return messages
+
+
+@app.get("/api/reactions/debug")
+def api_reactions_debug():
+    """Debug: show raw messages + reaction state (no caching, no side-effects)."""
+    try:
+        messages = _fetch_messages_for_reactions(20)
+    except Exception as e:  # noqa: BLE001
+        return {"error": str(e), "initialized": _reaction_initialized,
+                "seen_count": len(_reaction_seen)}
+    return {
+        "messages": messages,
+        "initialized": _reaction_initialized,
+        "seen_keys": sorted(_reaction_seen),
+        "emoji_candidates": [m for m in messages if _is_emoji_only(m["body"])],
+    }
 
 
 @app.get("/api/reactions")
@@ -878,7 +896,7 @@ def api_reactions():
     try:
         messages = _fetch_messages_for_reactions(10)
     except Exception as e:  # noqa: BLE001
-        logger.debug("reactions: get_messages failed: %s", e)
+        logger.warning("reactions: get_messages failed: %s", e)
         return {"reactions": []}
 
     current_keys = {f"{m['sender']}:{m['timestamp']}:{m['body']}" for m in messages}
