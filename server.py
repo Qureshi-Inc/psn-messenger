@@ -850,16 +850,26 @@ def api_squad():
         return JSONResponse({"squad": [], "error": str(e)}, status_code=500)
 
 
-def _fetch_messages_for_reactions(limit: int = 10) -> list[dict]:
-    """Fetch recent group messages using psnawp (v1 path — proven to work)."""
-    conversation = group.get_conversation(limit)
-    messages = []
-    for msg in conversation:
-        messages.append({
+def _msg_to_dict(msg) -> dict:
+    """Normalize a psnawp message (dict or object) into a plain dict."""
+    if isinstance(msg, dict):
+        return {
             "sender": str(msg.get("senderOnlineId", "unknown")),
             "body": str(msg.get("body", "")),
             "timestamp": str(msg.get("eventIndex", "")),
-        })
+        }
+    # psnawp 2.x Message objects — try common attribute names
+    return {
+        "sender": str(getattr(msg, "online_id", None) or getattr(msg, "sender_online_id", None) or getattr(msg, "senderOnlineId", "unknown")),
+        "body": str(getattr(msg, "body", "") or ""),
+        "timestamp": str(getattr(msg, "message_id", None) or getattr(msg, "event_index", None) or getattr(msg, "eventIndex", "")),
+    }
+
+
+def _fetch_messages_for_reactions(limit: int = 10) -> list[dict]:
+    """Fetch recent group messages using psnawp."""
+    conversation = group.get_conversation(limit)
+    messages = [_msg_to_dict(msg) for msg in conversation]
     logger.info("reactions: fetched %d messages: %s", len(messages),
                 [(m["sender"], repr(m["body"][:20])) for m in messages])
     return messages
@@ -869,11 +879,17 @@ def _fetch_messages_for_reactions(limit: int = 10) -> list[dict]:
 def api_reactions_debug():
     """Debug: show raw messages + reaction state (no caching, no side-effects)."""
     try:
-        messages = _fetch_messages_for_reactions(20)
+        raw_conv = list(group.get_conversation(20))
+        first_type = type(raw_conv[0]).__name__ if raw_conv else "empty"
+        first_attrs = [a for a in dir(raw_conv[0]) if not a.startswith("_")] if raw_conv else []
+        first_repr = repr(raw_conv[0])[:300] if raw_conv else ""
+        messages = [_msg_to_dict(m) for m in raw_conv]
     except Exception as e:  # noqa: BLE001
-        return {"error": str(e), "initialized": _reaction_initialized,
-                "seen_count": len(_reaction_seen)}
+        return {"error": str(e), "initialized": _reaction_initialized, "seen_count": len(_reaction_seen)}
     return {
+        "first_item_type": first_type,
+        "first_item_attrs": first_attrs,
+        "first_item_repr": first_repr,
         "messages": messages,
         "initialized": _reaction_initialized,
         "seen_keys": sorted(_reaction_seen),
