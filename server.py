@@ -850,6 +850,19 @@ def api_squad():
         return JSONResponse({"squad": [], "error": str(e)}, status_code=500)
 
 
+def _fetch_messages_for_reactions(limit: int = 10) -> list[dict]:
+    """Fetch recent group messages using psnawp (v1 path — proven to work)."""
+    conversation = group.get_conversation(limit)
+    messages = []
+    for msg in conversation:
+        messages.append({
+            "sender": str(msg.get("senderOnlineId", "unknown")),
+            "body": str(msg.get("body", "")),
+            "timestamp": str(msg.get("eventIndex", "")),
+        })
+    return messages
+
+
 @app.get("/api/reactions")
 def api_reactions():
     """Return new emoji-only messages since the last poll.
@@ -862,10 +875,8 @@ def api_reactions():
     now = _time.time()
     if now - _reaction_cache["ts"] < _REACTION_CACHE_TTL:
         return _reaction_cache["data"]
-    if not _v2_available:
-        return {"reactions": []}
     try:
-        messages = psn_messenger.get_messages(10)
+        messages = _fetch_messages_for_reactions(10)
     except Exception as e:  # noqa: BLE001
         logger.debug("reactions: get_messages failed: %s", e)
         return {"reactions": []}
