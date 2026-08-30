@@ -9,6 +9,9 @@ from psn_auth import PSNAuth
 logger = logging.getLogger(__name__)
 
 PSN_MESSAGING_BASE = "https://m.np.playstation.com/api/gamingLoungeGroups/v1"
+# psnawp uses /members/me/groups/... for GET; /groups/... for POST (send)
+PSN_MESSAGES_GET = PSN_MESSAGING_BASE + "/members/me/groups/{group_id}/threads/{group_id}/messages"
+PSN_MESSAGES_POST = PSN_MESSAGING_BASE + "/groups/{group_id}/threads/{group_id}/messages"
 
 
 class PSNMessenger:
@@ -30,7 +33,7 @@ class PSNMessenger:
 
     def send_message(self, message: str) -> bool:
         """Send a text message to the configured group."""
-        url = f"{PSN_MESSAGING_BASE}/groups/{self._group_id}/threads/{self._group_id}/messages"
+        url = PSN_MESSAGES_POST.format(group_id=self._group_id)
         payload = {
             "messageType": 1,
             "body": message,
@@ -47,34 +50,35 @@ class PSNMessenger:
         return False
 
     def get_messages(self, limit: int = 5) -> list[dict]:
-        """Get recent messages from the group."""
-        url = f"{PSN_MESSAGING_BASE}/groups/{self._group_id}/threads/{self._group_id}/messages"
-        params = {"limit": str(limit)}
+        """Get recent messages from the group (correct /members/me/ URL)."""
+        url = PSN_MESSAGES_GET.format(group_id=self._group_id)
+        params = {"limit": str(limit), "includeReactions": "true"}
 
         with httpx.Client(timeout=15) as client:
             resp = client.get(url, params=params, headers=self._headers)
 
         if resp.status_code != 200:
-            logger.error("v2: Get messages failed: %d", resp.status_code)
+            logger.error("v2: Get messages failed: %d %s", resp.status_code, resp.text[:200])
             return []
 
         data = resp.json()
-        logger.debug("v2: raw message keys: %s", list(data.keys()))
-        # PSN API may use "messages" or "threadMessages" depending on version.
         raw = data.get("messages") or data.get("threadMessages") or []
         messages = []
         for msg in raw:
+            sender_obj = msg.get("sender", {})
             messages.append({
-                "sender": msg.get("sender", {}).get("onlineId", "unknown"),
+                "sender": sender_obj.get("onlineId", "unknown") if isinstance(sender_obj, dict) else str(sender_obj),
                 "body": msg.get("body", ""),
-                "timestamp": msg.get("createdTimestamp", ""),
+                "timestamp": msg.get("createdTimestamp", msg.get("messageUid", "")),
+                "messageType": msg.get("messageType", 1),
+                "reactions": msg.get("reactions", []),
             })
         return messages
 
     def get_messages_raw(self, limit: int = 10) -> dict:
         """Return the raw PSN API response for debugging."""
-        url = f"{PSN_MESSAGING_BASE}/groups/{self._group_id}/threads/{self._group_id}/messages"
-        params = {"limit": str(limit)}
+        url = PSN_MESSAGES_GET.format(group_id=self._group_id)
+        params = {"limit": str(limit), "includeReactions": "true"}
         with httpx.Client(timeout=15) as client:
             resp = client.get(url, params=params, headers=self._headers)
         return {"status": resp.status_code, "body": resp.json() if resp.status_code == 200 else resp.text}

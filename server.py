@@ -867,40 +867,27 @@ def _msg_to_dict(msg) -> dict:
     }
 
 
-def _raw_messages_from_conv(conv) -> list:
-    """get_conversation() returns a dict; pull the actual message list out."""
-    if isinstance(conv, dict):
-        return conv.get("messages", [])
-    return list(conv)
-
-
 def _fetch_messages_for_reactions(limit: int = 10) -> list[dict]:
-    """Fetch recent group messages using psnawp."""
-    raw = _raw_messages_from_conv(group.get_conversation(limit))
-    messages = [_msg_to_dict(msg) for msg in raw]
-    logger.info("reactions: fetched %d messages: %s", len(messages),
-                [(m["sender"], repr(m["body"][:20])) for m in messages])
-    return messages
+    """Fetch recent group messages with reactions (uses correct /members/me/ URL)."""
+    if _v2_available:
+        msgs = psn_messenger.get_messages(limit)
+        logger.info("reactions: fetched %d msgs via v2: %s", len(msgs),
+                    [(m["sender"], repr(m["body"][:20]), m.get("reactions")) for m in msgs])
+        return msgs
+    # fallback: psnawp (no reactions field)
+    conv = group.get_conversation(limit)
+    raw = conv.get("messages", []) if isinstance(conv, dict) else list(conv)
+    return [_msg_to_dict(m) for m in raw]
 
 
 @app.get("/api/reactions/debug")
 def api_reactions_debug():
     """Debug: show raw messages + reaction state (no caching, no side-effects)."""
     try:
-        conv = group.get_conversation(20)
-        conv_type = type(conv).__name__
-        conv_keys = list(conv.keys()) if isinstance(conv, dict) else None
-        raw = _raw_messages_from_conv(conv)
-        first_msg_type = type(raw[0]).__name__ if raw else "empty"
-        first_msg_repr = repr(raw[0])[:500] if raw else ""
-        messages = [_msg_to_dict(m) for m in raw]
+        messages = _fetch_messages_for_reactions(20)
     except Exception as e:  # noqa: BLE001
         return {"error": str(e), "initialized": _reaction_initialized, "seen_count": len(_reaction_seen)}
     return {
-        "conv_type": conv_type,
-        "conv_keys": conv_keys,
-        "first_msg_type": first_msg_type,
-        "first_msg_repr": first_msg_repr,
         "messages": messages,
         "reaction_snapshot": {k: list(v) for k, v in _reaction_snapshot(messages).items()},
         "initialized": _reaction_initialized,
