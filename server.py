@@ -866,10 +866,17 @@ def _msg_to_dict(msg) -> dict:
     }
 
 
+def _raw_messages_from_conv(conv) -> list:
+    """get_conversation() returns a dict; pull the actual message list out."""
+    if isinstance(conv, dict):
+        return conv.get("messages", [])
+    return list(conv)
+
+
 def _fetch_messages_for_reactions(limit: int = 10) -> list[dict]:
     """Fetch recent group messages using psnawp."""
-    conversation = group.get_conversation(limit)
-    messages = [_msg_to_dict(msg) for msg in conversation]
+    raw = _raw_messages_from_conv(group.get_conversation(limit))
+    messages = [_msg_to_dict(msg) for msg in raw]
     logger.info("reactions: fetched %d messages: %s", len(messages),
                 [(m["sender"], repr(m["body"][:20])) for m in messages])
     return messages
@@ -879,17 +886,20 @@ def _fetch_messages_for_reactions(limit: int = 10) -> list[dict]:
 def api_reactions_debug():
     """Debug: show raw messages + reaction state (no caching, no side-effects)."""
     try:
-        raw_conv = list(group.get_conversation(20))
-        first_type = type(raw_conv[0]).__name__ if raw_conv else "empty"
-        first_attrs = [a for a in dir(raw_conv[0]) if not a.startswith("_")] if raw_conv else []
-        first_repr = repr(raw_conv[0])[:300] if raw_conv else ""
-        messages = [_msg_to_dict(m) for m in raw_conv]
+        conv = group.get_conversation(20)
+        conv_type = type(conv).__name__
+        conv_keys = list(conv.keys()) if isinstance(conv, dict) else None
+        raw = _raw_messages_from_conv(conv)
+        first_msg_type = type(raw[0]).__name__ if raw else "empty"
+        first_msg_repr = repr(raw[0])[:500] if raw else ""
+        messages = [_msg_to_dict(m) for m in raw]
     except Exception as e:  # noqa: BLE001
         return {"error": str(e), "initialized": _reaction_initialized, "seen_count": len(_reaction_seen)}
     return {
-        "first_item_type": first_type,
-        "first_item_attrs": first_attrs,
-        "first_item_repr": first_repr,
+        "conv_type": conv_type,
+        "conv_keys": conv_keys,
+        "first_msg_type": first_msg_type,
+        "first_msg_repr": first_msg_repr,
         "messages": messages,
         "initialized": _reaction_initialized,
         "seen_keys": sorted(_reaction_seen),
