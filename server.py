@@ -1495,6 +1495,9 @@ function fireConfetti(emoji) {
   tick();
 }
 
+// Debug: tap the live-count header to test confetti locally
+$('livecount').addEventListener('click', () => fireConfetti(['🔥','💀','👑','😂'][Math.floor(Math.random()*4)]));
+
 // Poll for new emoji reactions every 5 s
 async function pollReactions() {
   try {
