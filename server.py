@@ -1461,7 +1461,9 @@ let _cfFrame = null;
 function fireConfetti(emoji) {
   const cvs = $('confetti-canvas');
   const ctx = cvs.getContext('2d');
-  cvs.width = window.innerWidth; cvs.height = window.innerHeight;
+  const vp = window.visualViewport || window;
+  cvs.width = vp.width || window.innerWidth;
+  cvs.height = vp.height || window.innerHeight;
   const parts = Array.from({length:48}, () => ({
     x: Math.random() * cvs.width,
     y: -20 - Math.random() * 100,
@@ -1473,6 +1475,7 @@ function fireConfetti(emoji) {
     a: 1,
   }));
   if (_cfFrame) cancelAnimationFrame(_cfFrame);
+  const EMOJI_FONT = "Apple Color Emoji,Segoe UI Emoji,Noto Color Emoji,serif";
   function tick() {
     ctx.clearRect(0, 0, cvs.width, cvs.height);
     let any = false;
@@ -1482,7 +1485,7 @@ function fireConfetti(emoji) {
       if (p.a > 0) { any = true;
         ctx.save(); ctx.globalAlpha = p.a;
         ctx.translate(p.x, p.y); ctx.rotate(p.rot);
-        ctx.font = p.sz + 'px serif';
+        ctx.font = p.sz + 'px ' + EMOJI_FONT;
         ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
         ctx.fillText(emoji, 0, 0); ctx.restore(); }
     }
