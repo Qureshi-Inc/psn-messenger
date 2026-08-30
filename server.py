@@ -851,18 +851,19 @@ def api_squad():
 
 
 def _msg_to_dict(msg) -> dict:
-    """Normalize a psnawp message (dict or object) into a plain dict."""
-    if isinstance(msg, dict):
-        return {
-            "sender": str(msg.get("senderOnlineId", "unknown")),
-            "body": str(msg.get("body", "")),
-            "timestamp": str(msg.get("eventIndex", "")),
-        }
-    # psnawp 2.x Message objects — try common attribute names
+    """Normalize a PSN message dict into a plain dict."""
+    sender_obj = msg.get("sender", {})
+    sender = (
+        sender_obj.get("onlineId", "unknown")
+        if isinstance(sender_obj, dict)
+        else str(sender_obj)
+    )
     return {
-        "sender": str(getattr(msg, "online_id", None) or getattr(msg, "sender_online_id", None) or getattr(msg, "senderOnlineId", "unknown")),
-        "body": str(getattr(msg, "body", "") or ""),
-        "timestamp": str(getattr(msg, "message_id", None) or getattr(msg, "event_index", None) or getattr(msg, "eventIndex", "")),
+        "sender": sender,
+        "body": str(msg.get("body", "")),
+        "timestamp": str(msg.get("createdTimestamp", msg.get("messageUid", ""))),
+        "messageType": msg.get("messageType", 1),
+        "reactions": msg.get("reactions", []),
     }
 
 
@@ -901,19 +902,38 @@ def api_reactions_debug():
         "first_msg_type": first_msg_type,
         "first_msg_repr": first_msg_repr,
         "messages": messages,
+        "reaction_snapshot": {k: list(v) for k, v in _reaction_snapshot(messages).items()},
         "initialized": _reaction_initialized,
         "seen_keys": sorted(_reaction_seen),
         "emoji_candidates": [m for m in messages if _is_emoji_only(m["body"])],
     }
 
 
+def _reaction_snapshot(messages: list[dict]) -> dict[str, set]:
+    """Build a snapshot: messageUid -> set of reaction emoji strings seen."""
+    snap: dict[str, set] = {}
+    for m in messages:
+        uid = m["timestamp"]  # createdTimestamp or messageUid
+        rxns = m.get("reactions", [])
+        # reactions may be a list of dicts with an "emoji" or "body" key, or strings
+        emojis: set = set()
+        for r in (rxns if isinstance(rxns, list) else []):
+            if isinstance(r, dict):
+                e = r.get("emoji") or r.get("body") or r.get("emoticon") or r.get("reactionType") or ""
+                if e:
+                    emojis.add(str(e))
+            elif isinstance(r, str) and r:
+                emojis.add(r)
+        snap[uid] = emojis
+    return snap
+
+
 @app.get("/api/reactions")
 def api_reactions():
-    """Return new emoji-only messages since the last poll.
+    """Return new emoji reactions since last poll (both emoji-only messages and PSN reactions).
 
-    Cached for 4 s so multiple open tabs don't each hit the PSN API.
-    On the very first call the current message window is recorded as baseline
-    (no confetti on startup for old messages).
+    Cached for 2 s so multiple open tabs don't each hammer the PSN API.
+    First call establishes the baseline so old reactions don't fire on startup.
     """
     global _reaction_seen, _reaction_initialized, _reaction_cache
     now = _time.time()
@@ -925,22 +945,36 @@ def api_reactions():
         logger.warning("reactions: get_messages failed: %s", e)
         return {"reactions": []}
 
-    current_keys = {f"{m['sender']}:{m['timestamp']}:{m['body']}" for m in messages}
+    # Snapshot: message uid -> set of reaction emoji + whether we've seen the message
+    msg_keys = {f"{m['sender']}:{m['timestamp']}:{m['body']}" for m in messages}
+    rxn_snap = _reaction_snapshot(messages)
 
     if not _reaction_initialized:
-        _reaction_seen = current_keys
+        _reaction_seen = msg_keys
+        _reaction_cache["rxn_snap"] = rxn_snap
         _reaction_initialized = True
         result: dict = {"reactions": []}
         _reaction_cache = {"ts": now, "data": result}
         return result
 
+    prev_rxn_snap: dict[str, set] = _reaction_cache.get("rxn_snap", {})
     new_reactions = []
+
     for msg in messages:
         key = f"{msg['sender']}:{msg['timestamp']}:{msg['body']}"
+        # New emoji-only message
         if key not in _reaction_seen and _is_emoji_only(msg["body"]):
-            new_reactions.append({"sender": msg["sender"], "emoji": msg["body"].strip()})
+            new_reactions.append({"sender": msg["sender"], "emoji": msg["body"].strip(), "source": "message"})
 
-    _reaction_seen = current_keys
+        # New emoji reactions added to an existing message
+        uid = msg["timestamp"]
+        prev_emojis = prev_rxn_snap.get(uid, set())
+        curr_emojis = rxn_snap.get(uid, set())
+        for emoji in curr_emojis - prev_emojis:
+            new_reactions.append({"sender": msg["sender"], "emoji": emoji, "source": "reaction"})
+
+    _reaction_seen = msg_keys
+    _reaction_cache["rxn_snap"] = rxn_snap
     result = {"reactions": new_reactions}
     _reaction_cache = {"ts": now, "data": result}
     return result
