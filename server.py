@@ -899,7 +899,12 @@ def api_reactions():
     new_reactions = []
     for msg in messages:
         key = f"{msg['sender']}:{msg['timestamp']}:{msg['body']}"
-        if key not in _reaction_seen and _is_emoji_only(msg["body"]):
+        is_new = key not in _reaction_seen
+        is_emoji = _is_emoji_only(msg["body"])
+        if is_new:
+            logger.info("reactions: new msg from %s body=%r emoji_only=%s",
+                        msg["sender"], msg["body"][:30], is_emoji)
+        if is_new and is_emoji:
             new_reactions.append({"sender": msg["sender"], "emoji": msg["body"].strip()})
 
     _reaction_seen = msg_keys
