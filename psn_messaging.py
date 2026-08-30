@@ -59,11 +59,22 @@ class PSNMessenger:
             return []
 
         data = resp.json()
+        logger.debug("v2: raw message keys: %s", list(data.keys()))
+        # PSN API may use "messages" or "threadMessages" depending on version.
+        raw = data.get("messages") or data.get("threadMessages") or []
         messages = []
-        for msg in data.get("messages", []):
+        for msg in raw:
             messages.append({
                 "sender": msg.get("sender", {}).get("onlineId", "unknown"),
                 "body": msg.get("body", ""),
                 "timestamp": msg.get("createdTimestamp", ""),
             })
         return messages
+
+    def get_messages_raw(self, limit: int = 10) -> dict:
+        """Return the raw PSN API response for debugging."""
+        url = f"{PSN_MESSAGING_BASE}/groups/{self._group_id}/threads/{self._group_id}/messages"
+        params = {"limit": str(limit)}
+        with httpx.Client(timeout=15) as client:
+            resp = client.get(url, params=params, headers=self._headers)
+        return {"status": resp.status_code, "body": resp.json() if resp.status_code == 200 else resp.text}

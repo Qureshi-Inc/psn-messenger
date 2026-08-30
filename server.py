@@ -178,6 +178,18 @@ def v2_get_messages(limit: int = 5):
         raise HTTPException(status_code=500, detail=str(e))
 
 
+@app.get("/v2/messages/raw")
+def v2_get_messages_raw(limit: int = 10):
+    """Debug: return the raw PSN API response to inspect field names."""
+    if not _v2_available:
+        raise HTTPException(status_code=503, detail="v2 auth not initialized")
+    try:
+        return psn_messenger.get_messages_raw(limit)
+    except Exception as e:
+        logger.error(f"v2: get_messages_raw failed: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
 # === Auto-Squad: rally the squad group (everyone except wolfie/IG_Juicy) ===
 
 # A separate messenger bound to the squad group, reusing the same auth.
