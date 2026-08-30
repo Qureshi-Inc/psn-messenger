@@ -72,6 +72,20 @@ def _rate_limit(key: str) -> None:
         _rl_hits[key] = hits
 
 
+import re as _re
+
+def _is_emoji_only(text: str) -> bool:
+    """True if text has no ASCII alphanumeric characters (pure emoji/symbol reply)."""
+    t = text.strip()
+    return bool(t) and len(t) <= 30 and not _re.search(r'[a-zA-Z0-9]', t)
+
+# Emoji reaction polling state (in-memory, resets on container restart).
+_reaction_seen: set[str] = set()
+_reaction_initialized: bool = False
+_reaction_cache: dict = {"ts": 0.0, "data": {"reactions": []}}
+_REACTION_CACHE_TTL = 2.0
+
+
 class MessageRequest(BaseModel):
     message: str
 
@@ -824,6 +838,47 @@ def api_squad():
         return JSONResponse({"squad": [], "error": str(e)}, status_code=500)
 
 
+@app.get("/api/reactions")
+def api_reactions():
+    """Return new emoji-only messages since the last poll.
+
+    Cached for 4 s so multiple open tabs don't each hit the PSN API.
+    On the very first call the current message window is recorded as baseline
+    (no confetti on startup for old messages).
+    """
+    global _reaction_seen, _reaction_initialized, _reaction_cache
+    now = _time.time()
+    if now - _reaction_cache["ts"] < _REACTION_CACHE_TTL:
+        return _reaction_cache["data"]
+    if not _v2_available:
+        return {"reactions": []}
+    try:
+        messages = psn_messenger.get_messages(10)
+    except Exception as e:  # noqa: BLE001
+        logger.debug("reactions: get_messages failed: %s", e)
+        return {"reactions": []}
+
+    current_keys = {f"{m['sender']}:{m['timestamp']}:{m['body']}" for m in messages}
+
+    if not _reaction_initialized:
+        _reaction_seen = current_keys
+        _reaction_initialized = True
+        result: dict = {"reactions": []}
+        _reaction_cache = {"ts": now, "data": result}
+        return result
+
+    new_reactions = []
+    for msg in messages:
+        key = f"{msg['sender']}:{msg['timestamp']}:{msg['body']}"
+        if key not in _reaction_seen and _is_emoji_only(msg["body"]):
+            new_reactions.append({"sender": msg["sender"], "emoji": msg["body"].strip()})
+
+    _reaction_seen = current_keys
+    result = {"reactions": new_reactions}
+    _reaction_cache = {"ts": now, "data": result}
+    return result
+
+
 class CustomButtonRequest(BaseModel):
     text: str
     send: bool = True  # also fire it to the group immediately
@@ -1151,6 +1206,7 @@ _DASHBOARD_TMPL = r"""<!doctype html>
     border-radius:13px; font-size:14px; opacity:0; pointer-events:none; transition:opacity .2s;
     z-index:50; box-shadow:0 12px 30px rgba(0,0,0,.5); }
   .toast.show { opacity:1; }
+  #confetti-canvas { position:fixed; inset:0; z-index:999; pointer-events:none; }
 </style></head>
 <body><div class="wrap">
   <div class="top">
@@ -1183,6 +1239,7 @@ _DASHBOARD_TMPL = r"""<!doctype html>
   </div>
 </div>
 <div class="toast" id="toast"></div>
+<canvas id="confetti-canvas"></canvas>
 <script>
 const SOUNDBOARD = __SOUNDBOARD__;
 const $ = id => document.getElementById(id);
@@ -1398,5 +1455,54 @@ async function loadSquad(){
   } catch(e){ $('squad').innerHTML='<div class="empty">Couldn\'t load squad.</div>'; }
 }
 loadSquad(); setInterval(loadSquad, 30000);
+
+// Emoji confetti
+let _cfFrame = null;
+function fireConfetti(emoji) {
+  const cvs = $('confetti-canvas');
+  const ctx = cvs.getContext('2d');
+  cvs.width = window.innerWidth; cvs.height = window.innerHeight;
+  const parts = Array.from({length:48}, () => ({
+    x: Math.random() * cvs.width,
+    y: -20 - Math.random() * 100,
+    vx: (Math.random() - 0.5) * 5,
+    vy: 2.5 + Math.random() * 3,
+    sz: 22 + Math.random() * 24,
+    rot: Math.random() * Math.PI * 2,
+    rv: (Math.random() - 0.5) * 0.15,
+    a: 1,
+  }));
+  if (_cfFrame) cancelAnimationFrame(_cfFrame);
+  function tick() {
+    ctx.clearRect(0, 0, cvs.width, cvs.height);
+    let any = false;
+    for (const p of parts) {
+      p.x += p.vx; p.y += p.vy; p.vy += 0.12; p.rot += p.rv;
+      if (p.y > cvs.height * 0.72) p.a -= 0.022;
+      if (p.a > 0) { any = true;
+        ctx.save(); ctx.globalAlpha = p.a;
+        ctx.translate(p.x, p.y); ctx.rotate(p.rot);
+        ctx.font = p.sz + 'px serif';
+        ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
+        ctx.fillText(emoji, 0, 0); ctx.restore(); }
+    }
+    if (any) _cfFrame = requestAnimationFrame(tick);
+    else ctx.clearRect(0, 0, cvs.width, cvs.height);
+  }
+  tick();
+}
+
+// Poll for new emoji reactions every 5 s
+async function pollReactions() {
+  try {
+    const d = await (await fetch('/api/reactions')).json();
+    (d.reactions || []).forEach(r => {
+      fireConfetti(r.emoji);
+      toast(r.sender + ' reacted ' + r.emoji);
+    });
+  } catch(e) {}
+}
+setInterval(pollReactions, 2000);
+pollReactions();
 </script>
 </body></html>"""
