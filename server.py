@@ -851,7 +851,7 @@ def _forward_video_to_wa(message_uid: str, ugc_id: str, sender: str) -> None:
         logger.warning("video-forward: WA_BRIDGE_URL or WA_GOOPERS_JID not configured")
         return
 
-    import tempfile, httpx as _httpx
+    import httpx as _httpx
 
     # Step 1: get signed CDN URLs from gameMediaService
     urls = psn_messenger.get_clip_urls(ugc_id)
@@ -875,17 +875,11 @@ def _forward_video_to_wa(message_uid: str, ugc_id: str, sender: str) -> None:
 
     logger.info("video-forward: downloaded %d bytes", len(resp.content))
 
-    # Step 3: save to temp file, serve via psn-messenger, have WA bridge fetch it
-    tmp = tempfile.NamedTemporaryFile(delete=False, suffix=".mp4", dir="/tmp")
-    tmp.write(resp.content)
-    tmp.flush()
-    tmp.close()
-    fname = tmp.name.split("/")[-1]
-    _tmp_videos[fname] = tmp.name
-
+    # Step 3: POST base64-encoded bytes directly to the WA bridge
+    import base64
     caption = f"🎮 {sender} shared a clip"
     payload = {
-        "videoUrl": f"http://10.0.1.1:3000/api/video-tmp/{fname}",
+        "videoBase64": base64.b64encode(resp.content).decode(),
         "groupJid": WA_GOOPERS_JID,
         "caption": caption,
     }
@@ -899,18 +893,6 @@ def _forward_video_to_wa(message_uid: str, ugc_id: str, sender: str) -> None:
     except Exception as exc:
         logger.error("video-forward: WA bridge request failed: %s", exc)
 
-
-_tmp_videos: dict[str, str] = {}
-
-
-@app.get("/api/video-tmp/{filename}")
-def serve_tmp_video(filename: str):
-    """Serve a temporarily downloaded PSN clip for the WA bridge to fetch."""
-    from fastapi.responses import FileResponse
-    path = _tmp_videos.get(filename)
-    if not path:
-        raise HTTPException(status_code=404, detail="not found")
-    return FileResponse(path, media_type="video/mp4")
 
 
 
