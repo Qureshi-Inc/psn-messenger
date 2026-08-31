@@ -813,6 +813,79 @@ def _check_arc_alert(squad: list[dict]) -> None:
         _arc_alerted = False
 
 
+# === PSN → WhatsApp video forwarder =========================================
+# When Moiz posts a video clip in the crcmz-mod group the poller below detects
+# it, downloads the media via PSN API, and forwards to the WhatsApp bridge.
+WA_BRIDGE_URL = os.environ.get("WA_BRIDGE_URL", "")   # http://host.docker.internal:3100
+WA_GOOPERS_JID = os.environ.get("WA_GOOPERS_JID", "")  # Professional Goopers group JID
+
+_video_seen: set[str] = set()   # messageUids already forwarded (resets on restart)
+_video_watcher_started = False
+
+
+def _forward_video_to_wa(message_uid: str) -> None:
+    """Download PSN clip and POST to the WhatsApp bridge."""
+    if not WA_BRIDGE_URL or not WA_GOOPERS_JID:
+        logger.warning("video-forward: WA_BRIDGE_URL or WA_GOOPERS_JID not configured")
+        return
+
+    logger.info("video-forward: downloading PSN clip uid=%s", message_uid)
+    media_bytes = psn_messenger.download_media(message_uid)
+    if not media_bytes:
+        logger.error("video-forward: download returned nothing for uid=%s", message_uid)
+        return
+
+    # Write to temp file and expose via a data-URI or send bytes directly.
+    # We use a temp file and pass the local URL since the WA bridge has /send-video.
+    # Strategy: send the raw bytes as a multipart upload isn't supported by
+    # the simple HTTP bridge, so instead we try get_media_url for a direct CDN URL
+    # and pass that; if no CDN URL just forward the raw bytes via the bridge
+    # by writing to a temp file the bridge can fetch.
+    import tempfile, threading
+
+    cdn_url = psn_messenger.get_media_url(message_uid)
+    if cdn_url:
+        payload: dict = {"videoUrl": cdn_url, "groupJid": WA_GOOPERS_JID, "caption": "🎮"}
+        auth_hdr = None
+    else:
+        # CDN URL not available — save to temp file and serve via the psn-messenger API
+        tmp = tempfile.NamedTemporaryFile(delete=False, suffix=".mp4")
+        tmp.write(media_bytes)
+        tmp.flush()
+        tmp.close()
+        # Serve via /api/video-tmp/<filename>
+        _tmp_videos[tmp.name.split("/")[-1]] = tmp.name
+        payload = {
+            "videoUrl": f"http://host.docker.internal:3000/api/video-tmp/{tmp.name.split('/')[-1]}",
+            "groupJid": WA_GOOPERS_JID,
+            "caption": "🎮",
+        }
+        auth_hdr = None
+
+    import httpx as _httpx
+    try:
+        r = _httpx.post(f"{WA_BRIDGE_URL}/send-video", json=payload, timeout=60)
+        if r.status_code == 200:
+            logger.info("video-forward: sent to WhatsApp ok uid=%s", message_uid)
+        else:
+            logger.error("video-forward: WA bridge error %d %s", r.status_code, r.text[:200])
+    except Exception as exc:
+        logger.error("video-forward: WA bridge request failed: %s", exc)
+
+
+_tmp_videos: dict[str, str] = {}  # filename -> full path
+
+
+@app.get("/api/video-tmp/{filename}")
+def serve_tmp_video(filename: str):
+    """Serve a temporarily stored video clip (for WA bridge to fetch)."""
+    from fastapi.responses import FileResponse
+    path = _tmp_videos.get(filename)
+    if not path:
+        raise HTTPException(status_code=404, detail="not found")
+    return FileResponse(path, media_type="video/mp4")
+
+
 @app.on_event("startup")
 async def _start_squad_poller():
     global _poller_started
@@ -836,6 +909,28 @@ async def _start_squad_poller():
 
     asyncio.create_task(_loop())
     logger.info("squad presence poller started (60s)")
+
+    if WA_BRIDGE_URL and WA_GOOPERS_JID:
+        async def _video_watch_loop():
+            while True:
+                try:
+                    msgs = await asyncio.to_thread(psn_messenger.get_messages, 10)
+                    for msg in msgs:
+                        uid = msg.get("messageUid", "")
+                        if not uid or uid in _video_seen:
+                            continue
+                        if msg.get("messageType", 1) == 1:
+                            continue
+                        sender = (msg.get("sender") or "").lower()
+                        _video_seen.add(uid)
+                        logger.info("video-watch: new clip from %s uid=%s type=%s", sender, uid, msg.get("messageType"))
+                        await asyncio.to_thread(_forward_video_to_wa, uid)
+                except Exception as exc:  # noqa: BLE001
+                    logger.debug("video-watch tick failed: %s", exc)
+                await asyncio.sleep(20)
+
+        asyncio.create_task(_video_watch_loop())
+        logger.info("video watcher started (20s, forwarding all clips to WA)")
 
 
 @app.get("/api/squad")

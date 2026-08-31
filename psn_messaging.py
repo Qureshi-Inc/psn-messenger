@@ -12,6 +12,7 @@ PSN_MESSAGING_BASE = "https://m.np.playstation.com/api/gamingLoungeGroups/v1"
 # psnawp uses /members/me/groups/... for GET; /groups/... for POST (send)
 PSN_MESSAGES_GET = PSN_MESSAGING_BASE + "/members/me/groups/{group_id}/threads/{group_id}/messages"
 PSN_MESSAGES_POST = PSN_MESSAGING_BASE + "/groups/{group_id}/threads/{group_id}/messages"
+PSN_MEDIA_GET = PSN_MESSAGING_BASE + "/members/me/groups/{group_id}/threads/{group_id}/messages/{message_uid}/contentList/0"
 
 
 class PSNMessenger:
@@ -66,12 +67,38 @@ class PSNMessenger:
         messages = []
         for msg in raw:
             sender_obj = msg.get("sender", {})
+            msg_type = msg.get("messageType", 1)
+            if msg_type != 1:
+                logger.info("non-text message: type=%s uid=%s raw=%s", msg_type, msg.get("messageUid"), msg)
             messages.append({
                 "sender": sender_obj.get("onlineId", "unknown") if isinstance(sender_obj, dict) else str(sender_obj),
                 "body": msg.get("body", ""),
                 "timestamp": msg.get("createdTimestamp", msg.get("messageUid", "")),
-                "messageType": msg.get("messageType", 1),
+                "messageUid": msg.get("messageUid", ""),
+                "messageType": msg_type,
                 "reactions": msg.get("reactions", []),
             })
         return messages
+
+    def download_media(self, message_uid: str) -> bytes | None:
+        """Download binary media content for a non-text message."""
+        url = PSN_MEDIA_GET.format(group_id=self._group_id, message_uid=message_uid)
+        with httpx.Client(timeout=30, follow_redirects=True) as client:
+            resp = client.get(url, headers=self._headers)
+        if resp.status_code != 200:
+            logger.error("media download failed: %d %s", resp.status_code, resp.text[:200])
+            return None
+        return resp.content
+
+    def get_media_url(self, message_uid: str) -> str:
+        """Return the resolved (after redirect) CDN URL for a media message."""
+        url = PSN_MEDIA_GET.format(group_id=self._group_id, message_uid=message_uid)
+        with httpx.Client(timeout=15, follow_redirects=False) as client:
+            resp = client.get(url, headers=self._headers)
+        if resp.status_code in (301, 302, 303, 307, 308):
+            return resp.headers.get("location", "")
+        if resp.status_code == 200:
+            return url
+        logger.error("get_media_url failed: %d", resp.status_code)
+        return ""
 

@@ -7,6 +7,10 @@ services:
       - AWS_ACCESS_KEY_ID=${AWS_ACCESS_KEY_ID}
       - AWS_SECRET_ACCESS_KEY=${AWS_SECRET_ACCESS_KEY}
       - AWS_REGION=us-east-1
+      - WA_BRIDGE_URL=${WA_BRIDGE_URL:-}
+      - WA_GOOPERS_JID=${WA_GOOPERS_JID:-}
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
     ports:
       - "3001:3000"
     volumes:
