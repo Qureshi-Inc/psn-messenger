@@ -841,6 +841,9 @@ if WA_BRIDGE_URL:
         except Exception:
             pass
 
+import video_jobs as _vjobs
+_vjobs.init()
+
 _video_seen: set[str] = set()       # all UIDs observed since startup
 _video_initialized: bool = False    # True after first seed poll
 
@@ -919,48 +922,85 @@ async def _start_squad_poller():
                                 continue
                             _video_seen.add(uid)
                             if not _video_initialized:
-                                continue  # seed pass — mark as seen but don't forward
+                                continue  # seed pass
                             if msg.get("messageType", 1) == 1:
                                 continue
                             ugc_id = msg.get("ugcId", "")
                             if not ugc_id:
                                 continue
                             sender = msg.get("sender", "unknown")
-                            logger.info("video-watch: queuing clip from %s uid=%s ugcId=%s",
-                                        sender, uid, ugc_id)
-                            await _video_queue.put((uid, ugc_id, sender, 1))
+                            is_new = _vjobs.claim(uid, wm._group_id, ugc_id, sender)
+                            if is_new:
+                                logger.info("video-watch: new clip uid=%s ugcId=%s from %s",
+                                            uid, ugc_id, sender)
+                                await _video_queue.put(uid)
                 except Exception as exc:  # noqa: BLE001
                     logger.error("video-watch tick failed: %s", exc)
                 finally:
                     if not _video_initialized:
+                        recovered = _vjobs.recoverable_jobs()
+                        for job in recovered:
+                            _video_seen.add(job["message_uid"])
+                            await _video_queue.put(job["message_uid"])
                         _video_initialized = True
-                        logger.info("video-watch: seeded %d existing UIDs, now watching for new clips",
-                                    len(_video_seen))
+                        logger.info("video-watch: seeded %d UIDs, recovered %d unfinished jobs",
+                                    len(_video_seen), len(recovered))
                 await asyncio.sleep(20)
 
         async def _video_forward_worker():
             while True:
-                uid, ugc_id, sender, attempt = await _video_queue.get()
+                uid = await _video_queue.get()
                 try:
-                    ok = await asyncio.to_thread(_forward_video_to_wa, uid, ugc_id, sender)
-                    if not ok and attempt < 3:
-                        delay = 30 * attempt  # 30s, 60s, 90s
-                        logger.info("video-forward: will retry uid=%s in %ds (attempt %d/3)",
-                                    uid, delay, attempt)
-                        async def _requeue(u=uid, g=ugc_id, s=sender, a=attempt, d=delay):
-                            await asyncio.sleep(d)
-                            await _video_queue.put((u, g, s, a + 1))
-                        asyncio.create_task(_requeue())
-                    elif not ok:
-                        logger.error("video-forward: giving up after 3 attempts uid=%s", uid)
+                    job = _vjobs.get(uid)
+                    if not job or job["status"] in _vjobs.TERMINAL:
+                        _video_queue.task_done()
+                        continue
+
+                    _vjobs.mark(uid, _vjobs.DOWNLOADING)
+                    try:
+                        ok = await asyncio.wait_for(
+                            asyncio.to_thread(_forward_video_to_wa, uid,
+                                              job["ugc_id"], job["sender"]),
+                            timeout=300.0,
+                        )
+                    except asyncio.TimeoutError:
+                        logger.error("video-forward: timed out uid=%s", uid)
+                        ok = False
+
+                    if ok:
+                        _vjobs.mark(uid, _vjobs.DELIVERED)
+                    else:
+                        attempts = job["attempts"] + 1
+                        if attempts >= 5:
+                            _vjobs.mark(uid, _vjobs.FAILED, error="max attempts reached")
+                            logger.error("video-forward: gave up uid=%s after %d attempts",
+                                         uid, attempts)
+                        else:
+                            # Exponential backoff: 30s, 60s, 120s, 240s
+                            delay = 30 * (2 ** (attempts - 1))
+                            _vjobs.mark(uid, _vjobs.PENDING,
+                                        error="download/send failed",
+                                        next_attempt_at=_time.time() + delay)
+                            logger.info("video-forward: retry #%d in %ds uid=%s",
+                                        attempts, delay, uid)
+                            async def _requeue(u=uid, d=delay):
+                                await asyncio.sleep(d)
+                                await _video_queue.put(u)
+                            asyncio.create_task(_requeue())
                 except Exception as exc:  # noqa: BLE001
-                    logger.error("video-forward worker error: %s", exc)
+                    logger.error("video-forward worker error uid=%s: %s", uid, exc)
                 finally:
                     _video_queue.task_done()
 
         asyncio.create_task(_video_detect_loop())
         asyncio.create_task(_video_forward_worker())
-        logger.info("video watcher started (20s, crcmz-mod + squad, queued)")
+        logger.info("video watcher started (20s, crcmz-mod + squad, persistent jobs)")
+
+
+@app.get("/api/video-jobs")
+def api_video_jobs():
+    """Job queue status: counts + recent failed jobs."""
+    return {"stats": _vjobs.stats(), "queue_depth": _video_queue.qsize()}
 
 
 @app.get("/api/squad")

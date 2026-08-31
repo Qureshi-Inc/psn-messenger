@@ -133,7 +133,14 @@ class PSNMessenger:
         return self._download_hls(hls, ugc_id)
 
     def _download_hls(self, master_url: str, ugc_id: str) -> bytes | None:
-        """Download an HLS stream by fetching all segments and concatenating."""
+        """Download HLS stream → MP4 via ffmpeg.
+
+        Fetches master + variant playlists, rewrites relative segment paths to
+        absolute URLs (the signed CloudFront query string covers the whole dir),
+        writes a temp playlist, and lets ffmpeg stream-copy to MP4.
+        """
+        import subprocess, tempfile, os as _os
+
         base_dir = master_url.split("?")[0].rsplit("/", 1)[0] + "/"
         qs = ("?" + master_url.split("?")[1]) if "?" in master_url else ""
 
@@ -143,7 +150,6 @@ class PSNMessenger:
             logger.error("HLS master fetch failed: %d", resp.status_code)
             return None
 
-        # Pick first (highest bandwidth) variant from master playlist
         variant = next(
             (l.strip() for l in resp.text.splitlines() if l and not l.startswith("#")),
             None,
@@ -158,44 +164,39 @@ class PSNMessenger:
             logger.error("HLS variant fetch failed: %d", resp.status_code)
             return None
 
-        segments = [l.strip() for l in resp.text.splitlines() if l and not l.startswith("#")]
-        logger.info("HLS: %d segments for ugcId=%s", len(segments), ugc_id)
+        # Rewrite relative segment paths → absolute URLs so ffmpeg can fetch them
+        lines = []
+        seg_count = 0
+        for line in resp.text.splitlines():
+            s = line.strip()
+            if s and not s.startswith("#"):
+                lines.append(base_dir + s + qs)
+                seg_count += 1
+            else:
+                lines.append(line)
 
-        # Download all segments into one MPEG-TS buffer
-        ts_buf = bytearray()
-        with httpx.Client(timeout=30) as client:
-            for seg in segments:
-                r = client.get(base_dir + seg + qs)
-                if r.status_code != 200:
-                    logger.error("HLS segment failed: %s %d", seg, r.status_code)
-                    return None
-                ts_buf.extend(r.content)
+        logger.info("HLS: %d segments, passing rewritten playlist to ffmpeg for ugcId=%s",
+                    seg_count, ugc_id)
 
-        logger.info("HLS: downloaded %d TS bytes from %d segments, converting to MP4",
-                    len(ts_buf), len(segments))
-
-        # Remux MPEG-TS → MP4 using ffmpeg (no re-encode, copy streams)
-        import subprocess, tempfile
-        with tempfile.NamedTemporaryFile(suffix=".ts", delete=False) as ts_file:
-            ts_file.write(ts_buf)
-            ts_path = ts_file.name
-        mp4_path = ts_path.replace(".ts", ".mp4")
+        with tempfile.NamedTemporaryFile(suffix=".m3u8", mode="w", delete=False) as f:
+            f.write("\n".join(lines))
+            m3u8_path = f.name
+        mp4_path = m3u8_path.replace(".m3u8", ".mp4")
         try:
             result = subprocess.run(
-                ["ffmpeg", "-y", "-i", ts_path, "-c", "copy", "-movflags", "+faststart", mp4_path],
-                capture_output=True, timeout=120,
+                ["ffmpeg", "-y", "-i", m3u8_path,
+                 "-c", "copy", "-movflags", "+faststart", mp4_path],
+                capture_output=True, timeout=300,
             )
             if result.returncode != 0:
                 logger.error("ffmpeg failed: %s", result.stderr[-500:].decode(errors="replace"))
                 return None
             with open(mp4_path, "rb") as f:
                 mp4_bytes = f.read()
+            logger.info("HLS: MP4 %d bytes for ugcId=%s", len(mp4_bytes), ugc_id)
+            return mp4_bytes
         finally:
-            import os as _os
-            _os.unlink(ts_path)
+            _os.unlink(m3u8_path)
             if _os.path.exists(mp4_path):
                 _os.unlink(mp4_path)
-
-        logger.info("HLS: MP4 is %d bytes for ugcId=%s", len(mp4_bytes), ugc_id)
-        return mp4_bytes
 
