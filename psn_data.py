@@ -33,7 +33,7 @@ _cache_lock = threading.Lock()
 # Trophy summaries + avatars barely change, so we cache them per-account for a
 # long TTL. That way the per-minute presence poll only makes the light
 # presence+gamelist calls, keeping total PSN load low.
-_SLOW_TTL = 4 * 60 * 60  # 4 hours — trophies barely change
+_SLOW_TTL = 24 * 60 * 60  # 24 hours — fetch trophies at most once per person per day
 _slow_cache: dict = {}  # account_id -> {"at": ts, "trophy": {...}, "avatar": str}
 
 API = "https://m.np.playstation.com/api/userProfile/v1/internal/users"
