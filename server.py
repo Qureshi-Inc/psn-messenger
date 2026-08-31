@@ -1278,24 +1278,22 @@ def api_pipeline_status():
 
 @app.post("/api/scan-group")
 async def api_scan_group(max_pages: int = 10):
-    """Page back through group history and queue any unprocessed video clips.
+    """Page back through group history and register unprocessed video clips for the montage.
 
     Paginates using beforeMessageUid up to max_pages×100 messages back.
-    Clips already in the DB are skipped. Returns counts of found/queued clips.
+    Clips are registered in the DB (montage-eligible) but NOT forwarded to WhatsApp —
+    this is a backfill only. Live clips arriving via the normal watcher are forwarded.
     """
     if not _v2_available:
         raise HTTPException(503, "PSN auth not available")
-    if _video_queue is None:
-        raise HTTPException(503, "clip queue not initialized")
 
     found = 0
-    queued = 0
+    registered = 0
     skipped = 0
-    before_uid: str | None = None
     pages_fetched = 0
 
     for wm in _watched_messengers:
-        before_uid = None
+        before_uid: str | None = None
         for _ in range(max_pages):
             try:
                 msgs = await asyncio.to_thread(wm.get_messages_page, 100, before_uid)
@@ -1329,10 +1327,8 @@ async def api_scan_group(max_pages: int = 10):
                     uid, ugc_id, wm._group_id, wm._group_name, sender, psn_ts_ms,
                 )
                 if is_new:
-                    _video_seen.add(uid)
-                    await _video_queue.put(uid)
-                    logger.info("scan-group: queued uid=%s ugcId=%s sender=%s", uid, ugc_id, sender)
-                    queued += 1
+                    logger.info("scan-group: registered uid=%s ugcId=%s sender=%s", uid, ugc_id, sender)
+                    registered += 1
                 else:
                     skipped += 1
 
@@ -1341,8 +1337,8 @@ async def api_scan_group(max_pages: int = 10):
             if len(msgs) < 100:
                 break  # last page
 
-    logger.info("scan-group: pages=%d found=%d queued=%d skipped=%d", pages_fetched, found, queued, skipped)
-    return {"pages_fetched": pages_fetched, "video_msgs_found": found, "queued": queued, "already_known": skipped}
+    logger.info("scan-group: pages=%d found=%d registered=%d skipped=%d", pages_fetched, found, registered, skipped)
+    return {"pages_fetched": pages_fetched, "video_msgs_found": found, "registered": registered, "already_known": skipped}
 
 
 @app.get("/status")
