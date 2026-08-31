@@ -360,7 +360,7 @@ def _squad_status_uncached(auth, include_stats: bool = True) -> list[dict]:
     bot_token = auth.access_token
     out: list[dict] = []
     with httpx.Client() as client:
-        for a in accounts:
+        for i, a in enumerate(accounts):
             utok = _user_token(a)  # only linked accounts have a token file
             own = bool(utok)
             tok = utok or bot_token
@@ -368,12 +368,15 @@ def _squad_status_uncached(auth, include_stats: bool = True) -> list[dict]:
             entry = {k: v for k, v in a.items() if not k.startswith("_")}
             entry.update(pres)
             entry["linked"] = own
-            # Trophy + avatar from the slow cache (30 min) so the per-minute
-            # poll doesn't re-fetch them every time.
+            # Trophy + avatar cached per user for _SLOW_TTL.
+            # On first population, stagger each user's expiry evenly across the
+            # day so they never all expire simultaneously.
             slow = _slow_cache.get(a["account_id"])
             if not slow or (time.time() - slow["at"]) > _SLOW_TTL:
+                is_first = slow is None
+                stagger = i * (_SLOW_TTL / max(len(accounts), 1)) if is_first else 0
                 slow = {
-                    "at": time.time(),
+                    "at": time.time() + stagger,
                     "avatar": _avatar(client, bot_token, a.get("online_id")),
                     "trophy": _trophy_summary(client, tok, a["account_id"], own)
                     if include_stats else {},
