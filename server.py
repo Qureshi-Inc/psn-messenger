@@ -816,8 +816,30 @@ def _check_arc_alert(squad: list[dict]) -> None:
 # === PSN → WhatsApp video forwarder =========================================
 # When Moiz posts a video clip in the crcmz-mod group the poller below detects
 # it, downloads the media via PSN API, and forwards to the WhatsApp bridge.
-WA_BRIDGE_URL = os.environ.get("WA_BRIDGE_URL", "")   # http://host.docker.internal:3100
+WA_BRIDGE_URL = os.environ.get("WA_BRIDGE_URL", "")   # http://10.0.1.1:3100
 WA_GOOPERS_JID = os.environ.get("WA_GOOPERS_JID", "")  # Professional Goopers group JID
+
+# Resolve the actual WA bridge URL at startup — host.docker.internal may not
+# exist in Coolify-managed containers, so fall back to the default gateway.
+if WA_BRIDGE_URL:
+    import socket as _socket
+    _parsed = WA_BRIDGE_URL.replace("http://", "").replace("https://", "").split(":")[0]
+    try:
+        _socket.gethostbyname(_parsed)
+    except _socket.gaierror:
+        import re as _re
+        _port = WA_BRIDGE_URL.split(":")[-1] if ":" in WA_BRIDGE_URL.split("//")[-1] else "3100"
+        try:
+            with open("/proc/net/route") as _f:
+                for _line in _f:
+                    _parts = _line.split()
+                    if _parts[1] == "00000000":
+                        _gw_hex = _parts[2]
+                        _gw = ".".join(str(int(_gw_hex[i:i+2], 16)) for i in [6, 4, 2, 0])
+                        WA_BRIDGE_URL = f"http://{_gw}:{_port}"
+                        break
+        except Exception:
+            pass
 
 _video_seen: set[str] = set()   # messageUids already forwarded (resets on restart)
 _video_watcher_started = False
@@ -863,7 +885,7 @@ def _forward_video_to_wa(message_uid: str, ugc_id: str, sender: str) -> None:
 
     caption = f"🎮 {sender} shared a clip"
     payload = {
-        "videoUrl": f"http://host.docker.internal:3000/api/video-tmp/{fname}",
+        "videoUrl": f"http://10.0.1.1:3000/api/video-tmp/{fname}",
         "groupJid": WA_GOOPERS_JID,
         "caption": caption,
     }
