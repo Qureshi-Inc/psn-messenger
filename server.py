@@ -921,29 +921,32 @@ async def _start_squad_poller():
     logger.info("squad presence poller started (60s)")
 
     if WA_BRIDGE_URL and WA_GOOPERS_JID:
+        _watched_messengers = [m for m in [psn_messenger, _squad_messenger] if m is not None]
+
         async def _video_watch_loop():
             while True:
                 try:
-                    msgs = await asyncio.to_thread(psn_messenger.get_messages, 10)
-                    for msg in msgs:
-                        uid = msg.get("messageUid", "")
-                        if not uid or uid in _video_seen:
-                            continue
-                        if msg.get("messageType", 1) == 1:
-                            continue
-                        ugc_id = msg.get("ugcId", "")
-                        if not ugc_id:
-                            continue
-                        sender = msg.get("sender", "unknown")
-                        _video_seen.add(uid)
-                        logger.info("video-watch: new clip from %s uid=%s ugcId=%s", sender, uid, ugc_id)
-                        await asyncio.to_thread(_forward_video_to_wa, uid, ugc_id, sender)
+                    for wm in _watched_messengers:
+                        msgs = await asyncio.to_thread(wm.get_messages, 10)
+                        for msg in msgs:
+                            uid = msg.get("messageUid", "")
+                            if not uid or uid in _video_seen:
+                                continue
+                            if msg.get("messageType", 1) == 1:
+                                continue
+                            ugc_id = msg.get("ugcId", "")
+                            if not ugc_id:
+                                continue
+                            sender = msg.get("sender", "unknown")
+                            _video_seen.add(uid)
+                            logger.info("video-watch: new clip from %s uid=%s ugcId=%s", sender, uid, ugc_id)
+                            await asyncio.to_thread(_forward_video_to_wa, uid, ugc_id, sender)
                 except Exception as exc:  # noqa: BLE001
                     logger.error("video-watch tick failed: %s", exc)
                 await asyncio.sleep(20)
 
         asyncio.create_task(_video_watch_loop())
-        logger.info("video watcher started (20s, forwarding all clips to WA)")
+        logger.info("video watcher started (20s, watching crcmz-mod + squad)")
 
 
 @app.get("/api/squad")
