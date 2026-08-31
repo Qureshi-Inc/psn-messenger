@@ -362,17 +362,24 @@ class PSNMessenger:
             f.write("\n".join(lines))
             m3u8_path = f.name
         mp4_path = m3u8_path.replace(".m3u8", ".mp4")
+        ffmpeg_timeout = int(_os.environ.get("FFMPEG_TIMEOUT_SECONDS", "300"))
         try:
-            result = subprocess.run(
+            proc = subprocess.Popen(
                 ["ffmpeg", "-y",
                  "-protocol_whitelist", "file,http,https,tcp,tls,crypto",
                  "-i", m3u8_path,
                  "-c", "copy", "-movflags", "+faststart", mp4_path],
-                capture_output=True, timeout=300,
+                stdout=subprocess.PIPE, stderr=subprocess.PIPE,
             )
-            if result.returncode != 0:
+            try:
+                _, stderr_bytes = proc.communicate(timeout=ffmpeg_timeout)
+            except subprocess.TimeoutExpired:
+                proc.kill()
+                proc.communicate()
+                raise ClipError(f"ffmpeg timed out after {ffmpeg_timeout}s")
+            if proc.returncode != 0:
                 raise ClipError(
-                    "ffmpeg failed: " + result.stderr[-400:].decode(errors="replace")
+                    "ffmpeg failed: " + stderr_bytes[-400:].decode(errors="replace")
                 )
             with open(mp4_path, "rb") as f:
                 mp4_bytes = f.read()

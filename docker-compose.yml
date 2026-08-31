@@ -13,6 +13,8 @@ services:
       - CLIP_S3_ENDPOINT_URL=${CLIP_S3_ENDPOINT_URL:-}
       - GROUP_NAME=${GROUP_NAME:-crcmz-mod}
       - SQUAD_GROUP_NAME=${SQUAD_GROUP_NAME:-The Squad}
+      - FFMPEG_TIMEOUT_SECONDS=${FFMPEG_TIMEOUT_SECONDS:-300}
+      - MONTAGE_TIMEZONE=${MONTAGE_TIMEZONE:-America/Los_Angeles}
     extra_hosts:
       - "host.docker.internal:host-gateway"
     ports:
