@@ -12,7 +12,7 @@ PSN_MESSAGING_BASE = "https://m.np.playstation.com/api/gamingLoungeGroups/v1"
 # psnawp uses /members/me/groups/... for GET; /groups/... for POST (send)
 PSN_MESSAGES_GET = PSN_MESSAGING_BASE + "/members/me/groups/{group_id}/threads/{group_id}/messages"
 PSN_MESSAGES_POST = PSN_MESSAGING_BASE + "/groups/{group_id}/threads/{group_id}/messages"
-PSN_UGC_BASE = "https://ugc.np.community.playstation.net/ugc/v1"
+PSN_GAME_MEDIA = "https://m.np.playstation.com/api/gameMediaService/v2/c2s"
 
 
 class PSNMessenger:
@@ -81,24 +81,46 @@ class PSNMessenger:
             })
         return messages
 
+    def _gms_headers(self) -> dict[str, str]:
+        """Headers for gameMediaService — needs PlayStationApp-Android UA."""
+        return {
+            "Authorization": f"Bearer {self._auth.access_token}",
+            "User-Agent": "PlayStationApp-Android",
+            "Accept": "application/json",
+            "Accept-Language": "en-US",
+            "Country": "US",
+        }
+
+    def get_clip_urls(self, ugc_id: str) -> dict:
+        """Return download/preview URLs for a PSN GameShare clip via gameMediaService.
+
+        Returns dict with keys: downloadUrl, videoUrl, largePreviewImage, title, sender.
+        Returns empty dict on failure.
+        """
+        url = f"{PSN_GAME_MEDIA}/ugc/{ugc_id}/url"
+        with httpx.Client(timeout=15) as client:
+            r = client.get(url, headers=self._gms_headers())
+        if r.status_code != 200:
+            logger.error("gameMediaService url failed: %d %s", r.status_code, r.text[:200])
+            return {}
+        return r.json()
+
     def download_clip(self, ugc_id: str) -> bytes | None:
-        """Download a PSN GameShare video clip by its UGC ID."""
-        # Step 1: get the download URL from the UGC metadata endpoint
-        meta_url = f"{PSN_UGC_BASE}/contents/{ugc_id}"
-        with httpx.Client(timeout=15, follow_redirects=True) as client:
-            meta = client.get(meta_url, headers=self._headers)
-        if meta.status_code != 200:
-            logger.error("ugc meta failed: %d %s", meta.status_code, meta.text[:200])
-            return None
-        download_url = meta.json().get("mediaDownloadUrl") or meta.json().get("contentUrl", "")
+        """Download a PSN GameShare clip as MP4 bytes via gameMediaService."""
+        urls = self.get_clip_urls(ugc_id)
+        download_url = urls.get("downloadUrl") or urls.get("videoUrl", "")
         if not download_url:
-            logger.error("ugc meta: no download URL in response: %s", meta.text[:300])
+            logger.error("download_clip: no URL from gameMediaService for %s", ugc_id)
             return None
-        # Step 2: download the actual video bytes
-        with httpx.Client(timeout=60, follow_redirects=True) as client:
+        # Prefer direct MP4 over HLS playlist
+        if download_url.endswith(".m3u8") and urls.get("downloadUrl"):
+            download_url = urls["downloadUrl"]
+        logger.info("download_clip: fetching %s", download_url[:80])
+        with httpx.Client(timeout=120, follow_redirects=True) as client:
             resp = client.get(download_url)
         if resp.status_code != 200:
-            logger.error("clip download failed: %d", resp.status_code)
+            logger.error("download_clip: fetch failed %d", resp.status_code)
             return None
+        logger.info("download_clip: got %d bytes", len(resp.content))
         return resp.content
 

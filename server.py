@@ -824,30 +824,71 @@ _video_watcher_started = False
 
 
 def _forward_video_to_wa(message_uid: str, ugc_id: str, sender: str) -> None:
-    """Notify the WhatsApp group that someone shared a PSN clip."""
+    """Download PSN clip via gameMediaService and POST to the WhatsApp bridge."""
     if not WA_BRIDGE_URL or not WA_GOOPERS_JID:
         logger.warning("video-forward: WA_BRIDGE_URL or WA_GOOPERS_JID not configured")
         return
 
-    # PSN UGC download API is not accessible server-side (retired endpoints).
-    # Send a text ping so the squad knows to check PSN.
-    text = f"🎮 *{sender}* just shared a clip in the PSN group chat!"
+    import tempfile, httpx as _httpx
 
-    import httpx as _httpx
+    # Step 1: get signed CDN URLs from gameMediaService
+    urls = psn_messenger.get_clip_urls(ugc_id)
+    download_url = urls.get("downloadUrl") or urls.get("videoUrl", "")
+    if not download_url:
+        logger.error("video-forward: no download URL for ugcId=%s", ugc_id)
+        return
+
+    logger.info("video-forward: downloading from %s", download_url[:80])
+
+    # Step 2: download the MP4 bytes (signed CloudFront URL — no auth needed)
     try:
-        r = _httpx.post(
-            f"{WA_BRIDGE_URL}/send",
-            json={"message": text, "groupJid": WA_GOOPERS_JID},  # groupJid override not yet in /send — uses default
-            timeout=15,
-        )
-        # /send uses the default groupJid from env. If Goopers is the configured group it will work.
-        # Otherwise send directly to the configured group (likely Goopers).
+        with _httpx.Client(timeout=120, follow_redirects=True) as client:
+            resp = client.get(download_url)
+        if resp.status_code != 200:
+            logger.error("video-forward: download failed %d", resp.status_code)
+            return
+    except Exception as exc:
+        logger.error("video-forward: download error: %s", exc)
+        return
+
+    logger.info("video-forward: downloaded %d bytes", len(resp.content))
+
+    # Step 3: save to temp file, serve via psn-messenger, have WA bridge fetch it
+    tmp = tempfile.NamedTemporaryFile(delete=False, suffix=".mp4", dir="/tmp")
+    tmp.write(resp.content)
+    tmp.flush()
+    tmp.close()
+    fname = tmp.name.split("/")[-1]
+    _tmp_videos[fname] = tmp.name
+
+    caption = f"🎮 {sender} shared a clip"
+    payload = {
+        "videoUrl": f"http://host.docker.internal:3000/api/video-tmp/{fname}",
+        "groupJid": WA_GOOPERS_JID,
+        "caption": caption,
+    }
+
+    try:
+        r = _httpx.post(f"{WA_BRIDGE_URL}/send-video", json=payload, timeout=120)
         if r.status_code == 200:
-            logger.info("video-forward: WA notification sent for uid=%s", message_uid)
+            logger.info("video-forward: sent to WhatsApp ok uid=%s", message_uid)
         else:
             logger.error("video-forward: WA bridge error %d %s", r.status_code, r.text[:200])
     except Exception as exc:
         logger.error("video-forward: WA bridge request failed: %s", exc)
+
+
+_tmp_videos: dict[str, str] = {}
+
+
+@app.get("/api/video-tmp/{filename}")
+def serve_tmp_video(filename: str):
+    """Serve a temporarily downloaded PSN clip for the WA bridge to fetch."""
+    from fastapi.responses import FileResponse
+    path = _tmp_videos.get(filename)
+    if not path:
+        raise HTTPException(status_code=404, detail="not found")
+    return FileResponse(path, media_type="video/mp4")
 
 
 
@@ -894,7 +935,7 @@ async def _start_squad_poller():
                         logger.info("video-watch: new clip from %s uid=%s ugcId=%s", sender, uid, ugc_id)
                         await asyncio.to_thread(_forward_video_to_wa, uid, ugc_id, sender)
                 except Exception as exc:  # noqa: BLE001
-                    logger.debug("video-watch tick failed: %s", exc)
+                    logger.error("video-watch tick failed: %s", exc)
                 await asyncio.sleep(20)
 
         asyncio.create_task(_video_watch_loop())
