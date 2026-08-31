@@ -1166,7 +1166,7 @@ def api_pipeline_status():
         except Exception:
             return {"status": "down", "ms": None}
 
-    montage_health = _ping("http://localhost:3099/health")
+    montage_health = _ping("http://10.0.1.1:3099/health")
     wa_health      = _ping("http://10.0.1.1:3100/health")
 
     # Clip stats for current calendar month (Pacific time)
@@ -1206,7 +1206,7 @@ def api_pipeline_status():
     # Last completed montage from psn-montage
     last_montage = None
     try:
-        mj = _hx.get("http://localhost:3099/montages", timeout=3).json()
+        mj = _hx.get("http://10.0.1.1:3099/montages", timeout=3).json()
         completed = [m for m in mj if m.get("status") == "completed"]
         if completed:
             m = completed[0]
