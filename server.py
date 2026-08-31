@@ -953,18 +953,17 @@ async def _start_squad_poller():
     async def _loop():
         while True:
             try:
-                # Presence-only refresh every 60s — no trophy API calls.
+                # Presence-only refresh — no trophy API calls.
                 # Trophy data is only fetched when someone opens the dashboard
                 # (via /api/squad which uses include_stats=True).
-                psn_data._presence_cache["at"] = 0.0
                 squad = await asyncio.to_thread(psn_data.squad_status, psn_auth, False)
                 await asyncio.to_thread(_check_arc_alert, squad)
             except Exception as e:  # noqa: BLE001
                 logger.debug("squad poller tick failed: %s", e)
-            await asyncio.sleep(60)
+            await asyncio.sleep(180)
 
     asyncio.create_task(_loop())
-    logger.info("squad presence poller started (60s)")
+    logger.info("squad presence poller started (180s)")
 
     if WA_BRIDGE_URL and WA_GOOPERS_JID:
         global _watched_messengers, _video_queue
@@ -1028,7 +1027,7 @@ async def _start_squad_poller():
                             "video-watch: seeded %d UIDs, recovered %d unfinished jobs",
                             len(_video_seen), len(recovered),
                         )
-                await asyncio.sleep(20)
+                await asyncio.sleep(30)
 
         async def _video_forward_worker():
             while True:
@@ -1139,7 +1138,7 @@ async def _start_squad_poller():
 
         asyncio.create_task(_video_detect_loop())
         asyncio.create_task(_video_forward_worker())
-        logger.info("video watcher started (20s, %d groups, persistent clips DB)",
+        logger.info("video watcher started (30s, %d groups, persistent clips DB)",
                     len(_watched_messengers))
 
 
