@@ -1,3 +1,4 @@
+import asyncio
 import os
 import json
 import logging
@@ -947,8 +948,6 @@ async def _start_squad_poller():
     if _poller_started or not _v2_available:
         return
     _poller_started = True
-
-    import asyncio
 
     async def _loop():
         while True:
