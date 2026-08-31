@@ -841,53 +841,33 @@ if WA_BRIDGE_URL:
         except Exception:
             pass
 
-_video_seen: set[str] = set()   # messageUids already forwarded (resets on restart)
-_video_watcher_started = False
+_video_seen: set[str] = set()       # all UIDs observed since startup
+_video_initialized: bool = False    # True after first seed poll
 
 
 def _forward_video_to_wa(message_uid: str, ugc_id: str, sender: str) -> None:
-    """Download PSN clip via gameMediaService and POST to the WhatsApp bridge."""
+    """Download PSN clip and POST to the WhatsApp bridge."""
     if not WA_BRIDGE_URL or not WA_GOOPERS_JID:
         logger.warning("video-forward: WA_BRIDGE_URL or WA_GOOPERS_JID not configured")
         return
 
-    import httpx as _httpx
+    import base64, httpx as _httpx
 
-    # Step 1: get signed CDN URLs from gameMediaService
-    urls = psn_messenger.get_clip_urls(ugc_id)
-    download_url = urls.get("downloadUrl") or urls.get("videoUrl", "")
-    if not download_url:
-        logger.error("video-forward: no download URL for ugcId=%s", ugc_id)
+    video_bytes = psn_messenger.download_clip(ugc_id)
+    if not video_bytes:
+        logger.error("video-forward: download failed uid=%s ugcId=%s", message_uid, ugc_id)
         return
 
-    logger.info("video-forward: downloading from %s", download_url[:80])
-
-    # Step 2: download the MP4 bytes (signed CloudFront URL — no auth needed)
-    try:
-        with _httpx.Client(timeout=120, follow_redirects=True) as client:
-            resp = client.get(download_url)
-        if resp.status_code != 200:
-            logger.error("video-forward: download failed %d", resp.status_code)
-            return
-    except Exception as exc:
-        logger.error("video-forward: download error: %s", exc)
-        return
-
-    logger.info("video-forward: downloaded %d bytes", len(resp.content))
-
-    # Step 3: POST base64-encoded bytes directly to the WA bridge
-    import base64
-    caption = f"🎮 {sender} shared a clip"
+    logger.info("video-forward: sending %d bytes uid=%s", len(video_bytes), message_uid)
     payload = {
-        "videoBase64": base64.b64encode(resp.content).decode(),
+        "videoBase64": base64.b64encode(video_bytes).decode(),
         "groupJid": WA_GOOPERS_JID,
-        "caption": caption,
+        "caption": f"🎮 {sender} shared a clip",
     }
-
     try:
-        r = _httpx.post(f"{WA_BRIDGE_URL}/send-video", json=payload, timeout=120)
+        r = _httpx.post(f"{WA_BRIDGE_URL}/send-video", json=payload, timeout=180)
         if r.status_code == 200:
-            logger.info("video-forward: sent to WhatsApp ok uid=%s", message_uid)
+            logger.info("video-forward: sent ok uid=%s", message_uid)
         else:
             logger.error("video-forward: WA bridge error %d %s", r.status_code, r.text[:200])
     except Exception as exc:
@@ -922,8 +902,10 @@ async def _start_squad_poller():
 
     if WA_BRIDGE_URL and WA_GOOPERS_JID:
         _watched_messengers = [m for m in [psn_messenger, _squad_messenger] if m is not None]
+        _video_queue: asyncio.Queue = asyncio.Queue()
 
-        async def _video_watch_loop():
+        async def _video_detect_loop():
+            global _video_initialized
             while True:
                 try:
                     for wm in _watched_messengers:
@@ -932,21 +914,40 @@ async def _start_squad_poller():
                             uid = msg.get("messageUid", "")
                             if not uid or uid in _video_seen:
                                 continue
+                            _video_seen.add(uid)
+                            if not _video_initialized:
+                                continue  # seed pass — mark as seen but don't forward
                             if msg.get("messageType", 1) == 1:
                                 continue
                             ugc_id = msg.get("ugcId", "")
                             if not ugc_id:
                                 continue
                             sender = msg.get("sender", "unknown")
-                            _video_seen.add(uid)
-                            logger.info("video-watch: new clip from %s uid=%s ugcId=%s", sender, uid, ugc_id)
-                            await asyncio.to_thread(_forward_video_to_wa, uid, ugc_id, sender)
+                            logger.info("video-watch: queuing clip from %s uid=%s ugcId=%s",
+                                        sender, uid, ugc_id)
+                            await _video_queue.put((uid, ugc_id, sender))
                 except Exception as exc:  # noqa: BLE001
                     logger.error("video-watch tick failed: %s", exc)
+                finally:
+                    if not _video_initialized:
+                        _video_initialized = True
+                        logger.info("video-watch: seeded %d existing UIDs, now watching for new clips",
+                                    len(_video_seen))
                 await asyncio.sleep(20)
 
-        asyncio.create_task(_video_watch_loop())
-        logger.info("video watcher started (20s, watching crcmz-mod + squad)")
+        async def _video_forward_worker():
+            while True:
+                uid, ugc_id, sender = await _video_queue.get()
+                try:
+                    await asyncio.to_thread(_forward_video_to_wa, uid, ugc_id, sender)
+                except Exception as exc:  # noqa: BLE001
+                    logger.error("video-forward worker error: %s", exc)
+                finally:
+                    _video_queue.task_done()
+
+        asyncio.create_task(_video_detect_loop())
+        asyncio.create_task(_video_forward_worker())
+        logger.info("video watcher started (20s, crcmz-mod + squad, queued)")
 
 
 @app.get("/api/squad")
