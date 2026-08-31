@@ -161,16 +161,41 @@ class PSNMessenger:
         segments = [l.strip() for l in resp.text.splitlines() if l and not l.startswith("#")]
         logger.info("HLS: %d segments for ugcId=%s", len(segments), ugc_id)
 
-        buf = bytearray()
+        # Download all segments into one MPEG-TS buffer
+        ts_buf = bytearray()
         with httpx.Client(timeout=30) as client:
             for seg in segments:
                 r = client.get(base_dir + seg + qs)
                 if r.status_code != 200:
                     logger.error("HLS segment failed: %s %d", seg, r.status_code)
                     return None
-                buf.extend(r.content)
+                ts_buf.extend(r.content)
 
-        logger.info("HLS: assembled %d bytes from %d segments for ugcId=%s",
-                    len(buf), len(segments), ugc_id)
-        return bytes(buf)
+        logger.info("HLS: downloaded %d TS bytes from %d segments, converting to MP4",
+                    len(ts_buf), len(segments))
+
+        # Remux MPEG-TS → MP4 using ffmpeg (no re-encode, copy streams)
+        import subprocess, tempfile
+        with tempfile.NamedTemporaryFile(suffix=".ts", delete=False) as ts_file:
+            ts_file.write(ts_buf)
+            ts_path = ts_file.name
+        mp4_path = ts_path.replace(".ts", ".mp4")
+        try:
+            result = subprocess.run(
+                ["ffmpeg", "-y", "-i", ts_path, "-c", "copy", "-movflags", "+faststart", mp4_path],
+                capture_output=True, timeout=120,
+            )
+            if result.returncode != 0:
+                logger.error("ffmpeg failed: %s", result.stderr[-500:].decode(errors="replace"))
+                return None
+            with open(mp4_path, "rb") as f:
+                mp4_bytes = f.read()
+        finally:
+            import os as _os
+            _os.unlink(ts_path)
+            if _os.path.exists(mp4_path):
+                _os.unlink(mp4_path)
+
+        logger.info("HLS: MP4 is %d bytes for ugcId=%s", len(mp4_bytes), ugc_id)
+        return mp4_bytes
 
