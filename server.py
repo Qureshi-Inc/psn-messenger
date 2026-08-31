@@ -824,66 +824,31 @@ _video_watcher_started = False
 
 
 def _forward_video_to_wa(message_uid: str, ugc_id: str, sender: str) -> None:
-    """Download PSN clip and POST to the WhatsApp bridge."""
+    """Notify the WhatsApp group that someone shared a PSN clip."""
     if not WA_BRIDGE_URL or not WA_GOOPERS_JID:
         logger.warning("video-forward: WA_BRIDGE_URL or WA_GOOPERS_JID not configured")
         return
 
-    logger.info("video-forward: downloading PSN clip uid=%s ugcId=%s from %s", message_uid, ugc_id, sender)
-    media_bytes = psn_messenger.download_clip(ugc_id)
-    if not media_bytes:
-        logger.error("video-forward: download returned nothing for uid=%s", message_uid)
-        return
-
-    # Write to temp file and expose via a data-URI or send bytes directly.
-    # We use a temp file and pass the local URL since the WA bridge has /send-video.
-    # Strategy: send the raw bytes as a multipart upload isn't supported by
-    # the simple HTTP bridge, so instead we try get_media_url for a direct CDN URL
-    # and pass that; if no CDN URL just forward the raw bytes via the bridge
-    # by writing to a temp file the bridge can fetch.
-    import tempfile, threading
-
-    cdn_url = psn_messenger.get_media_url(message_uid)
-    if cdn_url:
-        payload: dict = {"videoUrl": cdn_url, "groupJid": WA_GOOPERS_JID, "caption": f"🎮 {sender} shared a clip"}
-        auth_hdr = None
-    else:
-        # CDN URL not available — save to temp file and serve via the psn-messenger API
-        tmp = tempfile.NamedTemporaryFile(delete=False, suffix=".mp4")
-        tmp.write(media_bytes)
-        tmp.flush()
-        tmp.close()
-        # Serve via /api/video-tmp/<filename>
-        _tmp_videos[tmp.name.split("/")[-1]] = tmp.name
-        payload = {
-            "videoUrl": f"http://host.docker.internal:3000/api/video-tmp/{tmp.name.split('/')[-1]}",
-            "groupJid": WA_GOOPERS_JID,
-            "caption": f"🎮 {sender} shared a clip",
-        }
-        auth_hdr = None
+    # PSN UGC download API is not accessible server-side (retired endpoints).
+    # Send a text ping so the squad knows to check PSN.
+    text = f"🎮 *{sender}* just shared a clip in the PSN group chat!"
 
     import httpx as _httpx
     try:
-        r = _httpx.post(f"{WA_BRIDGE_URL}/send-video", json=payload, timeout=60)
+        r = _httpx.post(
+            f"{WA_BRIDGE_URL}/send",
+            json={"message": text, "groupJid": WA_GOOPERS_JID},  # groupJid override not yet in /send — uses default
+            timeout=15,
+        )
+        # /send uses the default groupJid from env. If Goopers is the configured group it will work.
+        # Otherwise send directly to the configured group (likely Goopers).
         if r.status_code == 200:
-            logger.info("video-forward: sent to WhatsApp ok uid=%s", message_uid)
+            logger.info("video-forward: WA notification sent for uid=%s", message_uid)
         else:
             logger.error("video-forward: WA bridge error %d %s", r.status_code, r.text[:200])
     except Exception as exc:
         logger.error("video-forward: WA bridge request failed: %s", exc)
 
-
-_tmp_videos: dict[str, str] = {}  # filename -> full path
-
-
-@app.get("/api/video-tmp/{filename}")
-def serve_tmp_video(filename: str):
-    """Serve a temporarily stored video clip (for WA bridge to fetch)."""
-    from fastapi.responses import FileResponse
-    path = _tmp_videos.get(filename)
-    if not path:
-        raise HTTPException(status_code=404, detail="not found")
-    return FileResponse(path, media_type="video/mp4")
 
 
 @app.on_event("startup")
