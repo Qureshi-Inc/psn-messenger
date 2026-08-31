@@ -11,9 +11,11 @@ logger = logging.getLogger(__name__)
 
 NPSSO_TOKEN = os.environ.get("NPSSO_TOKEN")
 GROUP_ID = os.environ.get("GROUP_ID")
+GROUP_NAME = os.environ.get("GROUP_NAME", "crcmz-mod")
 # Auto-Squad: a separate PSN group (everyone except wolfie/IG_Juicy) that the
 # "Squad Up" Stream Deck button rallies. Created 2026-08-15; overridable via env.
 SQUAD_GROUP_ID = os.environ.get("SQUAD_GROUP_ID", "213250d833ccce334b651e2ee15e365c97468e02-869")
+SQUAD_GROUP_NAME = os.environ.get("SQUAD_GROUP_NAME", "The Squad")
 # Self-service linking portal: shared passcode friends type before the form
 # shows (keeps randos who find the URL out). Set PORTAL_PASSCODE in the env.
 PORTAL_PASSCODE = os.environ.get("PORTAL_PASSCODE", "")
@@ -132,7 +134,7 @@ try:
     from psn_messaging import PSNMessenger
 
     psn_auth = PSNAuth(NPSSO_TOKEN)
-    psn_messenger = PSNMessenger(psn_auth, GROUP_ID)
+    psn_messenger = PSNMessenger(psn_auth, GROUP_ID, GROUP_NAME)
     logger.info("v2: PSN auth initialized with token persistence")
     _v2_available = True
 except Exception as e:
@@ -194,7 +196,7 @@ def v2_get_messages_raw(limit: int = 10):
 
 # A separate messenger bound to the squad group, reusing the same auth.
 try:
-    _squad_messenger = PSNMessenger(psn_auth, SQUAD_GROUP_ID) if _v2_available else None
+    _squad_messenger = PSNMessenger(psn_auth, SQUAD_GROUP_ID, SQUAD_GROUP_NAME) if _v2_available else None
 except Exception as e:  # noqa: BLE001
     logger.warning(f"squad: messenger init failed: {e}")
     _squad_messenger = None
@@ -814,20 +816,16 @@ def _check_arc_alert(squad: list[dict]) -> None:
 
 
 # === PSN → WhatsApp video forwarder =========================================
-# When Moiz posts a video clip in the crcmz-mod group the poller below detects
-# it, downloads the media via PSN API, and forwards to the WhatsApp bridge.
-WA_BRIDGE_URL = os.environ.get("WA_BRIDGE_URL", "")   # http://10.0.1.1:3100
-WA_GOOPERS_JID = os.environ.get("WA_GOOPERS_JID", "")  # Professional Goopers group JID
+WA_BRIDGE_URL  = os.environ.get("WA_BRIDGE_URL", "")
+WA_GOOPERS_JID = os.environ.get("WA_GOOPERS_JID", "")
 
-# Resolve the actual WA bridge URL at startup — host.docker.internal may not
-# exist in Coolify-managed containers, so fall back to the default gateway.
+# Resolve WA bridge host — host.docker.internal may not exist in Coolify
 if WA_BRIDGE_URL:
     import socket as _socket
     _parsed = WA_BRIDGE_URL.replace("http://", "").replace("https://", "").split(":")[0]
     try:
         _socket.gethostbyname(_parsed)
     except _socket.gaierror:
-        import re as _re
         _port = WA_BRIDGE_URL.split(":")[-1] if ":" in WA_BRIDGE_URL.split("//")[-1] else "3100"
         try:
             with open("/proc/net/route") as _f:
@@ -841,43 +839,104 @@ if WA_BRIDGE_URL:
         except Exception:
             pass
 
-import video_jobs as _vjobs
-_vjobs.init()
+import clips as _clips
+import clip_store as _cstore
+from psn_messaging import ClipNotReady, ClipUnauthorized, ClipRateLimited, ClipError, ClipDownload
+_clips.init()
 
-_video_seen: set[str] = set()       # all UIDs observed since startup
-_video_initialized: bool = False    # True after first seed poll
+_video_seen: set[str] = set()
+_video_initialized: bool = False
+_video_queue: "asyncio.Queue[str]" = None   # type: ignore[assignment]
+_watched_messengers: list = []
 
 
-def _forward_video_to_wa(message_uid: str, ugc_id: str, sender: str) -> bool:
-    """Download PSN clip and POST to the WhatsApp bridge. Returns True on success."""
-    if not WA_BRIDGE_URL or not WA_GOOPERS_JID:
-        logger.warning("video-forward: WA_BRIDGE_URL or WA_GOOPERS_JID not configured")
-        return False
+def _messenger_for_group(group_id: str):
+    for m in _watched_messengers:
+        if m._group_id == group_id:
+            return m
+    return None
 
-    import base64, httpx as _httpx
 
-    video_bytes = psn_messenger.download_clip(ugc_id)
-    if not video_bytes:
-        logger.warning("video-forward: download failed (may still be processing) uid=%s ugcId=%s",
-                       message_uid, ugc_id)
-        return False
+def _send_to_wa(message_uid: str, video_bytes: bytes, sender: str) -> str | None:
+    """POST video bytes to slaptastic. Returns wa_message_id or None."""
+    import base64
+    import httpx as _httpx
 
-    logger.info("video-forward: sending %d bytes uid=%s", len(video_bytes), message_uid)
+    caption = f"{sender} shared a video."
+    idempotency_key = f"psn:{message_uid}"
+
     payload = {
         "videoBase64": base64.b64encode(video_bytes).decode(),
         "groupJid": WA_GOOPERS_JID,
-        "caption": f"🎮 {sender} shared a clip",
+        "caption": caption,
+        "idempotencyKey": idempotency_key,
     }
-    try:
-        r = _httpx.post(f"{WA_BRIDGE_URL}/send-video", json=payload, timeout=180)
-        if r.status_code == 200:
-            logger.info("video-forward: sent ok uid=%s", message_uid)
-            return True
-        logger.error("video-forward: WA bridge error %d %s", r.status_code, r.text[:200])
-        return False
-    except Exception as exc:
-        logger.error("video-forward: WA bridge request failed: %s", exc)
-        return False
+    logger.info("clip_whatsapp_send_started uid=%s bytes=%d", message_uid, len(video_bytes))
+    r = _httpx.post(f"{WA_BRIDGE_URL}/send-video", json=payload, timeout=180)
+    if r.status_code == 200:
+        resp = r.json()
+        # already_sent is fine — idempotency working as intended
+        status = resp.get("status", "")
+        wa_id  = resp.get("messageId")
+        logger.info("clip_whatsapp_sent uid=%s status=%s waId=%s", message_uid, status, wa_id)
+        return wa_id
+    raise ClipError(f"WA bridge error {r.status_code}: {r.text[:200]}")
+
+
+def _process_clip_job(message_uid: str, job: dict) -> str | None:
+    """Run the full clip pipeline synchronously. Returns wa_message_id.
+
+    Raises ClipNotReady, ClipUnauthorized, ClipRateLimited, ClipError.
+    Stage awareness: if already archived, loads from store and skips to send.
+    """
+    if not WA_BRIDGE_URL or not WA_GOOPERS_JID:
+        raise ClipError("WA_BRIDGE_URL or WA_GOOPERS_JID not configured")
+
+    ugc_id   = job["ugc_id"]
+    sender   = job["sender_online_id"]
+    group_id = job.get("psn_group_id", "")
+
+    # ── Resume from archive if available ──────────────────────────────────────
+    storage_key = job.get("storage_key_original")
+    if job.get("archive_status") == "archived" and storage_key:
+        logger.info("clip_archive: resuming from stored copy uid=%s", message_uid)
+        video_bytes = _cstore.load(storage_key)
+        if not video_bytes:
+            raise ClipError(f"archived clip missing from store: {storage_key}")
+        return _send_to_wa(message_uid, video_bytes, sender)
+
+    # ── Resolve + download ────────────────────────────────────────────────────
+    _clips.mark(message_uid, _clips.RESOLVING)
+    messenger = _messenger_for_group(group_id)
+    if not messenger:
+        # Fallback to primary messenger
+        messenger = psn_messenger
+
+    _clips.mark(message_uid, _clips.DOWNLOADING)
+    result: ClipDownload = messenger.download_clip(ugc_id)  # raises on error
+
+    # ── Archive ───────────────────────────────────────────────────────────────
+    _clips.mark(message_uid, _clips.PROCESSING)
+    key = _cstore.storage_key(message_uid, job.get("psn_created_at"))
+    ok  = _cstore.archive(key, result.data)
+    if not ok:
+        raise ClipError("archive storage write failed")
+
+    _clips.set_archived(
+        message_uid, key,
+        sha256=result.sha256,
+        file_size=result.file_size,
+        duration_seconds=result.duration_seconds,
+        width=result.width,
+        height=result.height,
+        fps=result.fps,
+        video_codec=result.video_codec,
+        audio_codec=result.audio_codec,
+        audio_sample_rate=result.audio_sample_rate,
+    )
+
+    # ── Send ─────────────────────────────────────────────────────────────────
+    return _send_to_wa(message_uid, result.data, sender)
 
 
 
@@ -907,8 +966,9 @@ async def _start_squad_poller():
     logger.info("squad presence poller started (60s)")
 
     if WA_BRIDGE_URL and WA_GOOPERS_JID:
+        global _watched_messengers, _video_queue
         _watched_messengers = [m for m in [psn_messenger, _squad_messenger] if m is not None]
-        _video_queue: asyncio.Queue = asyncio.Queue()
+        _video_queue = asyncio.Queue()
 
         async def _video_detect_loop():
             global _video_initialized
@@ -921,86 +981,222 @@ async def _start_squad_poller():
                             if not uid or uid in _video_seen:
                                 continue
                             _video_seen.add(uid)
+
+                            # Parse PSN timestamp (ms → int)
+                            psn_ts_ms: int | None = None
+                            ts_raw = msg.get("timestamp")
+                            if ts_raw:
+                                try:
+                                    psn_ts_ms = int(ts_raw)
+                                except (ValueError, TypeError):
+                                    pass
+
                             if not _video_initialized:
-                                continue  # seed pass
-                            if msg.get("messageType", 1) == 1:
+                                # Seed pass: record cursor, don't forward
+                                if psn_ts_ms:
+                                    _clips.update_cursor(wm._group_id, uid,
+                                                         psn_ts_ms / 1000.0)
+                                continue
+
+                            if msg.get("messageType", 1) != 210:
                                 continue
                             ugc_id = msg.get("ugcId", "")
                             if not ugc_id:
                                 continue
                             sender = msg.get("sender", "unknown")
-                            is_new = _vjobs.claim(uid, wm._group_id, ugc_id, sender)
+                            is_new = _clips.claim(
+                                uid, ugc_id, wm._group_id, wm._group_name,
+                                sender, psn_ts_ms,
+                            )
                             if is_new:
-                                logger.info("video-watch: new clip uid=%s ugcId=%s from %s",
-                                            uid, ugc_id, sender)
+                                logger.info(
+                                    "clip_detected uid=%s ugcId=%s sender=%s group=%s",
+                                    uid, ugc_id, sender, wm._group_name,
+                                )
                                 await _video_queue.put(uid)
                 except Exception as exc:  # noqa: BLE001
                     logger.error("video-watch tick failed: %s", exc)
                 finally:
                     if not _video_initialized:
-                        recovered = _vjobs.recoverable_jobs()
+                        recovered = _clips.recoverable_jobs()
                         for job in recovered:
                             _video_seen.add(job["message_uid"])
                             await _video_queue.put(job["message_uid"])
                         _video_initialized = True
-                        logger.info("video-watch: seeded %d UIDs, recovered %d unfinished jobs",
-                                    len(_video_seen), len(recovered))
+                        logger.info(
+                            "video-watch: seeded %d UIDs, recovered %d unfinished jobs",
+                            len(_video_seen), len(recovered),
+                        )
                 await asyncio.sleep(20)
 
         async def _video_forward_worker():
             while True:
                 uid = await _video_queue.get()
                 try:
-                    job = _vjobs.get(uid)
-                    if not job or job["status"] in _vjobs.TERMINAL:
-                        _video_queue.task_done()
+                    job = _clips.get(uid)
+                    if not job or job["status"] in _clips.TERMINAL:
                         continue
 
-                    _vjobs.mark(uid, _vjobs.DOWNLOADING)
+                    exc_info: tuple[str, str, int] | None = None  # (kind, msg, extra)
+                    wa_msg_id: str | None = None
+
                     try:
-                        ok = await asyncio.wait_for(
-                            asyncio.to_thread(_forward_video_to_wa, uid,
-                                              job["ugc_id"], job["sender"]),
+                        wa_msg_id = await asyncio.wait_for(
+                            asyncio.to_thread(_process_clip_job, uid, job),
                             timeout=300.0,
                         )
                     except asyncio.TimeoutError:
-                        logger.error("video-forward: timed out uid=%s", uid)
-                        ok = False
+                        exc_info = ("timeout", "ffmpeg/process timeout (300s)", 0)
+                    except ClipNotReady as e:
+                        exc_info = ("not_ready", str(e), 0)
+                    except ClipUnauthorized:
+                        exc_info = ("unauthorized", "PSN 401", 0)
+                    except ClipRateLimited as e:
+                        exc_info = ("rate_limited", str(e), e.retry_after)
+                    except ClipError as e:
+                        exc_info = ("error", str(e), 0)
+                    except Exception as e:
+                        exc_info = ("error", f"unexpected: {e}", 0)
 
-                    if ok:
-                        _vjobs.mark(uid, _vjobs.DELIVERED)
-                    else:
-                        attempts = job["attempts"] + 1
-                        if attempts >= 5:
-                            _vjobs.mark(uid, _vjobs.FAILED, error="max attempts reached")
-                            logger.error("video-forward: gave up uid=%s after %d attempts",
-                                         uid, attempts)
+                    if exc_info is None:
+                        _clips.set_delivered(uid, wa_msg_id)
+                        continue
+
+                    kind, error_msg, extra = exc_info
+                    attempts = job["attempts"] + 1
+
+                    if kind == "unauthorized":
+                        # Force token refresh; immediate retry
+                        psn_auth._expires_at = 0
+                        logger.warning("clip 401 uid=%s — refreshing PSN token", uid)
+                        if attempts <= 2:
+                            await _video_queue.put(uid)
                         else:
-                            # Exponential backoff: 30s, 60s, 120s, 240s
-                            delay = 30 * (2 ** (attempts - 1))
-                            _vjobs.mark(uid, _vjobs.PENDING,
-                                        error="download/send failed",
+                            _clips.mark(uid, _clips.FAILED,
+                                        error="401 after token refresh")
+                        continue
+
+                    if kind == "not_ready":
+                        # PSN CDN still transcoding — staged delays
+                        delays = [30, 60, 120, 240, 480]
+                        if attempts > len(delays):
+                            _clips.mark(uid, _clips.FAILED,
+                                        error=f"media never ready: {error_msg}")
+                            logger.error("clip_failed uid=%s reason=never_ready", uid)
+                        else:
+                            delay = delays[attempts - 1]
+                            _clips.mark(uid, _clips.WAITING_MEDIA,
+                                        error=error_msg,
                                         next_attempt_at=_time.time() + delay)
-                            logger.info("video-forward: retry #%d in %ds uid=%s",
-                                        attempts, delay, uid)
-                            async def _requeue(u=uid, d=delay):
+                            logger.info(
+                                "clip_retry_scheduled uid=%s attempt=%d delay=%ds reason=not_ready",
+                                uid, attempts, delay,
+                            )
+                            async def _requeue_nr(u=uid, d=delay):
                                 await asyncio.sleep(d)
                                 await _video_queue.put(u)
-                            asyncio.create_task(_requeue())
+                            asyncio.create_task(_requeue_nr())
+                        continue
+
+                    if kind == "rate_limited":
+                        delay = max(extra, 30)
+                        _clips.mark(uid, _clips.DISCOVERED,
+                                    error=error_msg,
+                                    next_attempt_at=_time.time() + delay)
+                        logger.warning("clip_retry_scheduled uid=%s reason=rate_limited delay=%ds",
+                                       uid, delay)
+                        async def _requeue_rl(u=uid, d=delay):
+                            await asyncio.sleep(d)
+                            await _video_queue.put(u)
+                        asyncio.create_task(_requeue_rl())
+                        continue
+
+                    # timeout / generic error — exponential backoff
+                    if attempts >= 5:
+                        _clips.mark(uid, _clips.FAILED,
+                                    error=f"max attempts: {error_msg}")
+                        logger.error("clip_failed uid=%s attempts=%d error=%s",
+                                     uid, attempts, error_msg[:80])
+                    else:
+                        delay = 30 * (2 ** (attempts - 1))
+                        _clips.mark(uid, _clips.DISCOVERED,
+                                    error=error_msg,
+                                    next_attempt_at=_time.time() + delay)
+                        logger.info(
+                            "clip_retry_scheduled uid=%s attempt=%d delay=%ds",
+                            uid, attempts, delay,
+                        )
+                        async def _requeue_e(u=uid, d=delay):
+                            await asyncio.sleep(d)
+                            await _video_queue.put(u)
+                        asyncio.create_task(_requeue_e())
+
                 except Exception as exc:  # noqa: BLE001
-                    logger.error("video-forward worker error uid=%s: %s", uid, exc)
+                    logger.exception("video worker unexpected error uid=%s: %s", uid, exc)
                 finally:
                     _video_queue.task_done()
 
         asyncio.create_task(_video_detect_loop())
         asyncio.create_task(_video_forward_worker())
-        logger.info("video watcher started (20s, crcmz-mod + squad, persistent jobs)")
+        logger.info("video watcher started (20s, %d groups, persistent clips DB)",
+                    len(_watched_messengers))
 
 
 @app.get("/api/video-jobs")
 def api_video_jobs():
-    """Job queue status: counts + recent failed jobs."""
-    return {"stats": _vjobs.stats(), "queue_depth": _video_queue.qsize()}
+    """Clip pipeline status: counts + queue depth."""
+    q_depth = _video_queue.qsize() if _video_queue is not None else 0
+    return {"stats": _clips.stats(), "queue_depth": q_depth}
+
+
+@app.get("/status")
+def status():
+    """Lightweight operational status for monitoring."""
+    q_depth  = _video_queue.qsize() if _video_queue is not None else 0
+    s = _clips.stats()
+    return {
+        "psn": "connected" if _v2_available else "unavailable",
+        "whatsapp": "configured" if (WA_BRIDGE_URL and WA_GOOPERS_JID) else "not_configured",
+        "clip_store": _cstore.backend(),
+        "groups": len(_watched_messengers),
+        "queue_depth": q_depth,
+        "clips_total": s.get("total", 0),
+        "clips_delivered": s.get("delivered", 0),
+        "clips_archived": s.get("archived", 0),
+        "clips_failed": s.get("failed", 0),
+        "clips_active": s.get("active", 0),
+    }
+
+
+@app.get("/clips")
+def api_clips(
+    month: str | None = None,
+    sender: str | None = None,
+    group_id: str | None = None,
+    status: str | None = None,
+    montage_eligible: bool | None = None,
+    limit: int = 50,
+    offset: int = 0,
+):
+    """Clip catalog with optional filters. month='2026-08'."""
+    rows = _clips.list_clips(
+        month=month, sender=sender, group_id=group_id,
+        status=status, montage_eligible=montage_eligible,
+        limit=min(limit, 200), offset=offset,
+    )
+    # Strip sha256 from list response (keep in detail view only)
+    for r in rows:
+        r.pop("sha256", None)
+    return {"clips": rows, "count": len(rows)}
+
+
+@app.get("/clips/{message_uid:path}")
+def api_clip_detail(message_uid: str):
+    """Full metadata for one clip."""
+    row = _clips.get(message_uid)
+    if not row:
+        raise HTTPException(status_code=404, detail="clip not found")
+    return row
 
 
 @app.get("/api/squad")

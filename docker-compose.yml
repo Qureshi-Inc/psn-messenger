@@ -9,6 +9,10 @@ services:
       - AWS_REGION=us-east-1
       - WA_BRIDGE_URL=${WA_BRIDGE_URL:-}
       - WA_GOOPERS_JID=${WA_GOOPERS_JID:-}
+      - CLIP_BUCKET=${CLIP_BUCKET:-}
+      - CLIP_S3_ENDPOINT_URL=${CLIP_S3_ENDPOINT_URL:-}
+      - GROUP_NAME=${GROUP_NAME:-crcmz-mod}
+      - SQUAD_GROUP_NAME=${SQUAD_GROUP_NAME:-The Squad}
     extra_hosts:
       - "host.docker.internal:host-gateway"
     ports:

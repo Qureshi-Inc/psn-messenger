@@ -3,7 +3,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends ffmpeg && rm -r
 WORKDIR /app
 COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
-COPY server.py psn_auth.py psn_messaging.py roast_bot.py portal.py psn_data.py mattermost.py video_jobs.py ./
+COPY server.py psn_auth.py psn_messaging.py roast_bot.py portal.py psn_data.py mattermost.py video_jobs.py clips.py clip_store.py ./
 RUN mkdir -p /data
 ENV PYTHONUNBUFFERED=1
 EXPOSE 3000
