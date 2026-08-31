@@ -1203,23 +1203,62 @@ def api_pipeline_status():
     next_build_ts = next_build_dt.timestamp()
     next_build_label = next_build_dt.strftime("%b %-d, %Y · %-I %p PT")
 
-    # Last completed montage from psn-montage
+    # Last completed montage from psn-montage + its manifest
     last_montage = None
+    manifest_by_uid: dict = {}  # uid → {included, excluded_reason}
     try:
         mj = _hx.get("http://10.0.1.1:3099/montages", timeout=3).json()
-        completed = [m for m in mj if m.get("status") == "completed"]
-        if completed:
-            m = completed[0]
+        # Find the latest completed build for the CURRENT month
+        current_month_builds = [
+            m for m in mj
+            if m.get("status") == "completed"
+            and m.get("year") == now.year
+            and m.get("month") == now.month
+        ]
+        all_completed = [m for m in mj if m.get("status") == "completed"]
+        if current_month_builds:
+            m = current_month_builds[0]
             last_montage = {
-                "version": m["version"],
-                "year":    m["year"],
-                "month":   m["month"],
-                "clips":   m.get("included_clip_count", 0),
+                "version": m["version"], "year": m["year"], "month": m["month"],
+                "clips": m.get("included_clip_count", 0),
                 "duration": round(m.get("actual_duration_seconds") or 0, 1),
-                "sent":    bool(m.get("whatsapp_message_id")),
+                "sent": bool(m.get("whatsapp_message_id")),
+            }
+            try:
+                manifest_resp = _hx.get(
+                    f"http://10.0.1.1:3099/montages/{m['id']}/manifest", timeout=3
+                ).json()
+                for c in manifest_resp.get("clips", []):
+                    manifest_by_uid[c["message_uid"]] = {
+                        "included": c.get("included", False),
+                        "excluded_reason": c.get("excluded_reason"),
+                    }
+            except Exception:
+                pass
+        elif all_completed:
+            m = all_completed[0]
+            last_montage = {
+                "version": m["version"], "year": m["year"], "month": m["month"],
+                "clips": m.get("included_clip_count", 0),
+                "duration": round(m.get("actual_duration_seconds") or 0, 1),
+                "sent": bool(m.get("whatsapp_message_id")),
             }
     except Exception:
         pass
+
+    # Build clip list for this month enriched with manifest status
+    clip_list = []
+    for c in month_clips:
+        uid = c.get("message_uid", "")
+        ms = manifest_by_uid.get(uid, {})
+        clip_list.append({
+            "uid":      uid,
+            "sender":   c.get("sender_online_id") or "unknown",
+            "duration": round(c.get("duration_seconds") or 0, 1),
+            "at":       c.get("discovered_at"),
+            "included": ms.get("included"),          # None = not yet built
+            "reason":   ms.get("excluded_reason"),
+        })
 
     return {
         "services": {
@@ -1234,6 +1273,7 @@ def api_pipeline_status():
         "next_build_label": next_build_label,
         "next_build_month": datetime(next_year, next_month, 1, tzinfo=tz).strftime("%B %Y"),
         "last_montage":     last_montage,
+        "clips":            clip_list,
     }
 
 
@@ -1734,6 +1774,22 @@ _DASHBOARD_TMPL = r"""<!doctype html>
     border:1px solid rgba(255,64,64,.3); }
   .last-clip-note { font-size:12px; color:var(--dim); text-align:center;
     margin-top:2px; padding:4px 0; }
+  .clip-list { background:var(--card); border:1px solid var(--line);
+    border-radius:13px; overflow:hidden; }
+  .clip-row { display:flex; align-items:center; gap:9px; padding:10px 14px;
+    font-size:13px; border-bottom:1px solid rgba(255,255,255,.05); }
+  .clip-row:last-child { border-bottom:none; }
+  .cdot { width:18px; text-align:center; font-size:12px; font-weight:900; flex:none; }
+  .cdot-in   { color:var(--lime); }
+  .cdot-ex   { color:#ff6060; }
+  .cdot-pend { color:var(--dim); }
+  .csender { font-weight:700; flex:1; min-width:0; overflow:hidden;
+    text-overflow:ellipsis; white-space:nowrap; }
+  .cdur { color:var(--cyan); font-size:12px; flex:none; }
+  .creason { font-size:11px; color:var(--gold); background:rgba(255,210,74,.1);
+    border:1px solid rgba(255,210,74,.25); border-radius:8px; padding:1px 7px;
+    flex:none; white-space:nowrap; }
+  .cage { color:var(--dim); font-size:11px; flex:none; margin-left:auto; }
 </style></head>
 <body><div class="wrap">
   <div class="top">
@@ -2105,7 +2161,19 @@ ${lm ? `<div class="pip-section">
     <div class="lm-row"><span class="lm-key">Duration</span><span class="lm-val">${lm.duration}s</span></div>
     <div class="lm-row"><span class="lm-key">Sent to group</span><span class="lm-val"><span class="sent-badge ${lm.sent?'yes':'no'}">${lm.sent?'✓ Sent':'Not sent'}</span></span></div>
   </div>
-</div>` : ''}`;
+</div>` : ''}
+${(d.clips||[]).length ? `<div class="pip-section">
+  <p class="pip-title">Clips This Month (${(d.clips||[]).length})</p>
+  <div class="clip-list">
+  ${(d.clips||[]).map(c => {
+    const statusDot = c.included === true ? '<span class="cdot cdot-in">✓</span>'
+      : c.included === false ? '<span class="cdot cdot-ex">✕</span>'
+      : '<span class="cdot cdot-pend">·</span>';
+    const reasonTxt = c.reason ? `<span class="creason">${esc(c.reason.replace('_',' '))}</span>` : '';
+    return `<div class="clip-row">${statusDot}<span class="csender">${esc(c.sender)}</span><span class="cdur">${c.duration}s</span>${reasonTxt}<span class="cage">${fmtAgo(c.at)}</span></div>`;
+  }).join('')}
+  </div>
+</div>` : '<p class="last-clip-note" style="margin-top:8px">No clips captured this month yet</p>'}`;
   } catch(e) {
     $('pipeline-inner').innerHTML = '<div class="card"><div class="empty">Could not load pipeline status.</div></div>';
   }
