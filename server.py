@@ -1195,10 +1195,33 @@ def api_pipeline_status():
     except Exception:
         pass
 
-    # Next auto-build info
+    # Next auto-build info — find the earliest future build date for a month
+    # that doesn't already have a completed montage.
     build_day  = int(os.environ.get("MONTAGE_BUILD_DAY",  "1"))
     build_hour = int(os.environ.get("MONTAGE_BUILD_HOUR", "6"))
-    next_build_dt = datetime(next_year, next_month, build_day, build_hour, 0, 0, tzinfo=tz)
+
+    # Fetch existing completed montages so we can skip already-built months
+    _built_months: set = set()
+    try:
+        _mj = _hx.get("http://10.0.1.1:3099/montages", timeout=3).json()
+        for _m in _mj:
+            if _m.get("status") == "completed":
+                _built_months.add((_m["year"], _m["month"]))
+    except Exception:
+        pass
+
+    # Walk forward month by month until we find one that hasn't been built yet
+    _bm, _by = next_month, next_year
+    for _ in range(24):
+        # The build fires on build_day of (_bm, _by) for the PREVIOUS month
+        prev_m = _bm - 1 if _bm > 1 else 12
+        prev_y = _by if _bm > 1 else _by - 1
+        if (prev_y, prev_m) not in _built_months:
+            break
+        _bm = (_bm % 12) + 1
+        _by = _by + (1 if _bm == 1 else 0)
+
+    next_build_dt = datetime(_by, _bm, build_day, build_hour, 0, 0, tzinfo=tz)
     next_build_ts = next_build_dt.timestamp()
     next_build_label = next_build_dt.strftime("%b %-d, %Y · %-I %p PT")
 
