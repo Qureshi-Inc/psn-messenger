@@ -364,7 +364,9 @@ class PSNMessenger:
         mp4_path = m3u8_path.replace(".m3u8", ".mp4")
         try:
             result = subprocess.run(
-                ["ffmpeg", "-y", "-i", m3u8_path,
+                ["ffmpeg", "-y",
+                 "-protocol_whitelist", "file,http,https,tcp,tls,crypto",
+                 "-i", m3u8_path,
                  "-c", "copy", "-movflags", "+faststart", mp4_path],
                 capture_output=True, timeout=300,
             )
