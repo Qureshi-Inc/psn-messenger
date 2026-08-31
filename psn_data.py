@@ -26,13 +26,14 @@ USERS_DIR = Path("/data/users")
 # (each polling every 30s), PSN is queried at most once per CACHE_TTL. A lock
 # ensures concurrent viewers coalesce onto a single refresh instead of stampeding.
 CACHE_TTL = 55.0  # seconds; one real PSN sweep per ~minute, max
-_cache: dict = {"at": 0.0, "data": None}
+_cache: dict          = {"at": 0.0, "data": None}  # full (presence + trophies)
+_presence_cache: dict = {"at": 0.0, "data": None}  # presence only (background poller)
 _cache_lock = threading.Lock()
 
 # Trophy summaries + avatars barely change, so we cache them per-account for a
 # long TTL. That way the per-minute presence poll only makes the light
 # presence+gamelist calls, keeping total PSN load low.
-_SLOW_TTL = 30 * 60  # 30 min
+_SLOW_TTL = 4 * 60 * 60  # 4 hours — trophies barely change
 _slow_cache: dict = {}  # account_id -> {"at": ts, "trophy": {...}, "avatar": str}
 
 API = "https://m.np.playstation.com/api/userProfile/v1/internal/users"
@@ -321,25 +322,26 @@ def _recent_game(client: httpx.Client, token: str) -> dict:
 def squad_status(auth, include_stats: bool = True) -> list[dict]:
     """Cached wrapper around the PSN sweep -- see module-level cache notes.
 
-    Returns cached data if it's younger than CACHE_TTL. Under the lock, a second
-    check prevents a thundering herd from all triggering refreshes at once. If a
-    refresh errors, we keep serving the last good data rather than hammering PSN.
+    include_stats=True  → full data including trophies (dashboard endpoint).
+    include_stats=False → presence + gamelist only, no trophy calls (background poller).
+    Each uses its own cache so they don't stomp each other.
     """
+    bucket = _cache if include_stats else _presence_cache
     now = time.time()
-    if _cache["data"] is not None and (now - _cache["at"]) < CACHE_TTL:
-        return _cache["data"]
+    if bucket["data"] is not None and (now - bucket["at"]) < CACHE_TTL:
+        return bucket["data"]
     with _cache_lock:
         now = time.time()
-        if _cache["data"] is not None and (now - _cache["at"]) < CACHE_TTL:
-            return _cache["data"]
+        if bucket["data"] is not None and (now - bucket["at"]) < CACHE_TTL:
+            return bucket["data"]
         try:
             data = _squad_status_uncached(auth, include_stats)
-            _cache["data"] = data
-            _cache["at"] = time.time()
+            bucket["data"] = data
+            bucket["at"] = time.time()
             return data
         except Exception as exc:  # noqa: BLE001
             logger.warning("squad refresh failed; serving stale: %s", exc)
-            return _cache["data"] or []
+            return bucket["data"] or []
 
 
 def _squad_status_uncached(auth, include_stats: bool = True) -> list[dict]:

@@ -953,10 +953,11 @@ async def _start_squad_poller():
     async def _loop():
         while True:
             try:
-                # Force a real refresh by bypassing the freshness check: reset
-                # the cache timestamp so squad_status re-sweeps, then call it.
-                psn_data._cache["at"] = 0.0
-                squad = await asyncio.to_thread(psn_data.squad_status, psn_auth)
+                # Presence-only refresh every 60s — no trophy API calls.
+                # Trophy data is only fetched when someone opens the dashboard
+                # (via /api/squad which uses include_stats=True).
+                psn_data._presence_cache["at"] = 0.0
+                squad = await asyncio.to_thread(psn_data.squad_status, psn_auth, False)
                 await asyncio.to_thread(_check_arc_alert, squad)
             except Exception as e:  # noqa: BLE001
                 logger.debug("squad poller tick failed: %s", e)
