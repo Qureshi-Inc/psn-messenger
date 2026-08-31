@@ -1149,6 +1149,94 @@ def api_video_jobs():
     return {"stats": _clips.stats(), "queue_depth": q_depth}
 
 
+@app.get("/api/pipeline-status")
+def api_pipeline_status():
+    """Aggregated health for the PSN → montage pipeline."""
+    import httpx as _hx
+    import time as _time
+    from datetime import datetime
+    from zoneinfo import ZoneInfo
+
+    def _ping(url, timeout=3.0):
+        try:
+            t0 = _time.monotonic()
+            r = _hx.get(url, timeout=timeout)
+            ms = int((_time.monotonic() - t0) * 1000)
+            return {"status": "ok" if r.status_code < 400 else "error", "ms": ms}
+        except Exception:
+            return {"status": "down", "ms": None}
+
+    montage_health = _ping("http://localhost:3099/health")
+    wa_health      = _ping("http://10.0.1.1:3100/health")
+
+    # Clip stats for current calendar month (Pacific time)
+    tz = ZoneInfo("America/Los_Angeles")
+    now = datetime.now(tz)
+    import calendar
+    month_start = datetime(now.year, now.month, 1, tzinfo=tz).timestamp()
+    next_month  = (now.month % 12) + 1
+    next_year   = now.year + (1 if now.month == 12 else 0)
+    month_end   = datetime(next_year, next_month, 1, tzinfo=tz).timestamp()
+
+    clips_this_month = 0
+    last_clip_at     = None
+    last_clip_sender = None
+    try:
+        all_month = _clips.list_clips(limit=200)
+        month_clips = [
+            c for c in all_month
+            if c.get("montage_eligible") and
+               month_start <= (c.get("discovered_at") or 0) < month_end
+        ]
+        month_clips.sort(key=lambda c: c.get("discovered_at") or 0, reverse=True)
+        clips_this_month = len(month_clips)
+        if month_clips:
+            last_clip_at     = month_clips[0].get("discovered_at")
+            last_clip_sender = month_clips[0].get("sender_online_id")
+    except Exception:
+        pass
+
+    # Next auto-build info
+    build_day  = int(os.environ.get("MONTAGE_BUILD_DAY",  "1"))
+    build_hour = int(os.environ.get("MONTAGE_BUILD_HOUR", "6"))
+    next_build_dt = datetime(next_year, next_month, build_day, build_hour, 0, 0, tzinfo=tz)
+    next_build_ts = next_build_dt.timestamp()
+    next_build_label = next_build_dt.strftime("%b %-d, %Y · %-I %p PT")
+
+    # Last completed montage from psn-montage
+    last_montage = None
+    try:
+        mj = _hx.get("http://localhost:3099/montages", timeout=3).json()
+        completed = [m for m in mj if m.get("status") == "completed"]
+        if completed:
+            m = completed[0]
+            last_montage = {
+                "version": m["version"],
+                "year":    m["year"],
+                "month":   m["month"],
+                "clips":   m.get("included_clip_count", 0),
+                "duration": round(m.get("actual_duration_seconds") or 0, 1),
+                "sent":    bool(m.get("whatsapp_message_id")),
+            }
+    except Exception:
+        pass
+
+    return {
+        "services": {
+            "psn_messenger": {"status": "ok", "ms": 0},
+            "psn_montage":   montage_health,
+            "wa_bridge":     wa_health,
+        },
+        "clips_this_month": clips_this_month,
+        "last_clip_at":     last_clip_at,
+        "last_clip_sender": last_clip_sender,
+        "next_build_ts":    next_build_ts,
+        "next_build_label": next_build_label,
+        "next_build_month": datetime(next_year, next_month, 1, tzinfo=tz).strftime("%B %Y"),
+        "last_montage":     last_montage,
+    }
+
+
 @app.get("/status")
 def status():
     """Lightweight operational status for monitoring."""
@@ -1602,6 +1690,50 @@ _DASHBOARD_TMPL = r"""<!doctype html>
     z-index:50; box-shadow:0 12px 30px rgba(0,0,0,.5); }
   .toast.show { opacity:1; }
   #confetti-canvas { position:fixed; inset:0; z-index:999; pointer-events:none; }
+
+  /* ── Pipeline / Montage panel ── */
+  .pip-section { margin-bottom:14px; }
+  .pip-title { font-family:"Orbitron",sans-serif; font-size:10px; letter-spacing:2px;
+    color:var(--dim); text-transform:uppercase; margin:0 0 8px; padding:0 2px; }
+  .svc-row { display:flex; align-items:center; gap:11px; padding:12px 14px;
+    background:var(--card); border:1px solid var(--line); border-radius:13px;
+    margin-bottom:8px; }
+  .svc-dot { width:10px; height:10px; border-radius:50%; flex:none;
+    box-shadow:0 0 7px currentColor; }
+  .dot-ok   { background:var(--lime); color:var(--lime); }
+  .dot-warn { background:var(--gold); color:var(--gold); }
+  .dot-down { background:#ff4040;     color:#ff4040; }
+  .svc-name { font-weight:700; font-size:14px; flex:1; }
+  .svc-meta { font-size:12px; color:var(--dim); }
+  .big-stat { display:grid; grid-template-columns:1fr 1fr; gap:10px; margin-bottom:14px; }
+  .bstat { background:var(--card); border:1px solid var(--line); border-radius:13px;
+    padding:14px 16px; text-align:center; }
+  .bstat .bv { font-family:"Orbitron",sans-serif; font-size:28px; font-weight:900;
+    background:linear-gradient(90deg,var(--cyan),var(--neon));
+    -webkit-background-clip:text; background-clip:text; color:transparent; line-height:1.1; }
+  .bstat .bl { font-size:11px; color:var(--dim); text-transform:uppercase;
+    letter-spacing:1px; margin-top:4px; }
+  .pip-build { background:var(--card); border:1px solid var(--line); border-radius:13px;
+    padding:14px 16px; margin-bottom:14px; }
+  .pip-build .pb-label { font-size:11px; color:var(--dim); text-transform:uppercase;
+    letter-spacing:1px; margin-bottom:5px; }
+  .pip-build .pb-date { font-family:"Orbitron",sans-serif; font-size:14px;
+    color:var(--gold); text-shadow:0 0 10px rgba(255,210,74,.5); }
+  .pip-build .pb-countdown { font-size:12px; color:var(--cyan); margin-top:4px; }
+  .last-montage { background:var(--card); border:1px solid var(--line);
+    border-radius:13px; padding:14px 16px; margin-bottom:14px; }
+  .lm-row { display:flex; justify-content:space-between; align-items:center;
+    font-size:13px; padding:3px 0; }
+  .lm-key { color:var(--dim); }
+  .lm-val { font-weight:700; }
+  .sent-badge { display:inline-block; padding:2px 9px; border-radius:20px; font-size:11px;
+    font-weight:700; letter-spacing:.5px; }
+  .sent-badge.yes { background:rgba(140,255,43,.15); color:var(--lime);
+    border:1px solid rgba(140,255,43,.4); }
+  .sent-badge.no  { background:rgba(255,64,64,.12); color:#ff9090;
+    border:1px solid rgba(255,64,64,.3); }
+  .last-clip-note { font-size:12px; color:var(--dim); text-align:center;
+    margin-top:2px; padding:4px 0; }
 </style></head>
 <body><div class="wrap">
   <div class="top">
@@ -1613,11 +1745,13 @@ _DASHBOARD_TMPL = r"""<!doctype html>
   <div class="tabs">
     <button class="tab on" data-p="squad" onclick="tab(this)">Squad</button>
     <button class="tab" data-p="lb" onclick="tab(this)">🏆 Leaderboard</button>
+    <button class="tab" data-p="pipeline" onclick="tab(this)">🎬 Montage</button>
   </div>
   <div id="together"></div>
   <div class="statgrid" id="statgrid"></div>
   <div class="panel on" id="p-squad"><div class="card" id="squad"><div class="spin">Loading squad…</div></div></div>
   <div class="panel" id="p-lb"><div class="card" id="lb"><div class="spin">Loading leaderboard…</div></div></div>
+  <div class="panel" id="p-pipeline"><div id="pipeline-inner"><div class="spin">Loading pipeline…</div></div></div>
   <p style="text-align:center;margin:16px 0"><a class="link-cta" href="/portal">＋ Link your PlayStation account</a></p>
 </div>
 
@@ -1905,5 +2039,78 @@ async function pollReactions() {
 }
 setInterval(pollReactions, 2000);
 pollReactions();
+
+// ── Pipeline / Montage status ──────────────────────────────────────────────
+function fmtAgo(ts) {
+  if (!ts) return 'never';
+  const s = Math.floor(Date.now()/1000 - ts);
+  if (s < 60)   return s + 's ago';
+  if (s < 3600) return Math.floor(s/60) + 'm ago';
+  if (s < 86400) return Math.floor(s/3600) + 'h ago';
+  return Math.floor(s/86400) + 'd ago';
+}
+function fmtCountdown(ts) {
+  const s = Math.floor(ts - Date.now()/1000);
+  if (s <= 0) return 'imminent';
+  const d = Math.floor(s/86400), h = Math.floor((s%86400)/3600);
+  return d + 'd ' + h + 'h away';
+}
+function dotClass(svc) {
+  if (!svc) return 'dot-down';
+  if (svc.status === 'ok') return 'dot-ok';
+  if (svc.status === 'error') return 'dot-warn';
+  return 'dot-down';
+}
+function svcLabel(svc) {
+  if (!svc || svc.status === 'down') return 'unreachable';
+  return svc.status === 'ok' ? (svc.ms != null ? svc.ms+'ms' : 'ok') : 'error';
+}
+async function loadPipeline() {
+  try {
+    const d = await (await fetch('/api/pipeline-status')).json();
+    const sv = d.services || {};
+    const lm = d.last_montage;
+    const monthLabel = d.next_build_month || '';
+    $('pipeline-inner').innerHTML = `
+<div class="pip-section">
+  <p class="pip-title">Services</p>
+  <div class="svc-row"><span class="svc-dot ${dotClass(sv.psn_messenger)}"></span>
+    <span class="svc-name">PSN Messenger</span><span class="svc-meta">${svcLabel(sv.psn_messenger)}</span></div>
+  <div class="svc-row"><span class="svc-dot ${dotClass(sv.psn_montage)}"></span>
+    <span class="svc-name">Montage Engine</span><span class="svc-meta">${svcLabel(sv.psn_montage)}</span></div>
+  <div class="svc-row"><span class="svc-dot ${dotClass(sv.wa_bridge)}"></span>
+    <span class="svc-name">WhatsApp Bridge</span><span class="svc-meta">${svcLabel(sv.wa_bridge)}</span></div>
+</div>
+<div class="pip-section">
+  <p class="pip-title">This Month — ${monthLabel}</p>
+  <div class="big-stat">
+    <div class="bstat"><div class="bv">${d.clips_this_month ?? 0}</div><div class="bl">Clips Captured</div></div>
+    <div class="bstat"><div class="bv">${fmtCountdown(d.next_build_ts)}</div><div class="bl">Until Build</div></div>
+  </div>
+  ${d.last_clip_at ? `<p class="last-clip-note">Last clip: <b>${fmtAgo(d.last_clip_at)}</b> from <b>${esc(d.last_clip_sender||'')}</b></p>` : '<p class="last-clip-note">No clips captured yet this month</p>'}
+</div>
+<div class="pip-section">
+  <p class="pip-title">Next Auto-Build</p>
+  <div class="pip-build">
+    <div class="pb-label">Scheduled</div>
+    <div class="pb-date">${d.next_build_label || '—'}</div>
+    <div class="pb-countdown">${fmtCountdown(d.next_build_ts)} · auto-send to Goopers</div>
+  </div>
+</div>
+${lm ? `<div class="pip-section">
+  <p class="pip-title">Last Montage</p>
+  <div class="last-montage">
+    <div class="lm-row"><span class="lm-key">Version</span><span class="lm-val">v${lm.version} · ${lm.year}-${String(lm.month).padStart(2,'0')}</span></div>
+    <div class="lm-row"><span class="lm-key">Clips</span><span class="lm-val">${lm.clips} included</span></div>
+    <div class="lm-row"><span class="lm-key">Duration</span><span class="lm-val">${lm.duration}s</span></div>
+    <div class="lm-row"><span class="lm-key">Sent to group</span><span class="lm-val"><span class="sent-badge ${lm.sent?'yes':'no'}">${lm.sent?'✓ Sent':'Not sent'}</span></span></div>
+  </div>
+</div>` : ''}`;
+  } catch(e) {
+    $('pipeline-inner').innerHTML = '<div class="card"><div class="empty">Could not load pipeline status.</div></div>';
+  }
+}
+loadPipeline();
+setInterval(loadPipeline, 30000);
 </script>
 </body></html>"""
