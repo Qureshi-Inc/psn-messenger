@@ -106,21 +106,71 @@ class PSNMessenger:
         return r.json()
 
     def download_clip(self, ugc_id: str) -> bytes | None:
-        """Download a PSN GameShare clip as MP4 bytes via gameMediaService."""
+        """Download a PSN GameShare clip via gameMediaService.
+
+        Prefers a direct downloadUrl (MP4). Falls back to HLS reassembly
+        when only videoUrl (m3u8) is present.
+        """
         urls = self.get_clip_urls(ugc_id)
-        download_url = urls.get("downloadUrl") or urls.get("videoUrl", "")
-        if not download_url:
-            logger.error("download_clip: no URL from gameMediaService for %s", ugc_id)
+        direct = urls.get("downloadUrl", "")
+        hls = urls.get("videoUrl", "")
+
+        if not direct and not hls:
+            logger.error("download_clip: no URL for ugcId=%s", ugc_id)
             return None
-        # Prefer direct MP4 over HLS playlist
-        if download_url.endswith(".m3u8") and urls.get("downloadUrl"):
-            download_url = urls["downloadUrl"]
-        logger.info("download_clip: fetching %s", download_url[:80])
-        with httpx.Client(timeout=120, follow_redirects=True) as client:
-            resp = client.get(download_url)
+
+        if direct and not direct.endswith(".m3u8"):
+            logger.info("download_clip: direct MP4 %s", direct[:80])
+            with httpx.Client(timeout=120, follow_redirects=True) as client:
+                resp = client.get(direct)
+            if resp.status_code != 200:
+                logger.error("download_clip: direct fetch failed %d", resp.status_code)
+                return None
+            logger.info("download_clip: got %d bytes", len(resp.content))
+            return resp.content
+
+        # No direct MP4 — reassemble from HLS
+        return self._download_hls(hls, ugc_id)
+
+    def _download_hls(self, master_url: str, ugc_id: str) -> bytes | None:
+        """Download an HLS stream by fetching all segments and concatenating."""
+        base_dir = master_url.split("?")[0].rsplit("/", 1)[0] + "/"
+        qs = ("?" + master_url.split("?")[1]) if "?" in master_url else ""
+
+        with httpx.Client(timeout=15) as client:
+            resp = client.get(master_url)
         if resp.status_code != 200:
-            logger.error("download_clip: fetch failed %d", resp.status_code)
+            logger.error("HLS master fetch failed: %d", resp.status_code)
             return None
-        logger.info("download_clip: got %d bytes", len(resp.content))
-        return resp.content
+
+        # Pick first (highest bandwidth) variant from master playlist
+        variant = next(
+            (l.strip() for l in resp.text.splitlines() if l and not l.startswith("#")),
+            None,
+        )
+        if not variant:
+            logger.error("HLS: no variant in master for ugcId=%s", ugc_id)
+            return None
+
+        with httpx.Client(timeout=15) as client:
+            resp = client.get(base_dir + variant + qs)
+        if resp.status_code != 200:
+            logger.error("HLS variant fetch failed: %d", resp.status_code)
+            return None
+
+        segments = [l.strip() for l in resp.text.splitlines() if l and not l.startswith("#")]
+        logger.info("HLS: %d segments for ugcId=%s", len(segments), ugc_id)
+
+        buf = bytearray()
+        with httpx.Client(timeout=30) as client:
+            for seg in segments:
+                r = client.get(base_dir + seg + qs)
+                if r.status_code != 200:
+                    logger.error("HLS segment failed: %s %d", seg, r.status_code)
+                    return None
+                buf.extend(r.content)
+
+        logger.info("HLS: assembled %d bytes from %d segments for ugcId=%s",
+                    len(buf), len(segments), ugc_id)
+        return bytes(buf)
 
