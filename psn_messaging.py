@@ -12,7 +12,7 @@ PSN_MESSAGING_BASE = "https://m.np.playstation.com/api/gamingLoungeGroups/v1"
 # psnawp uses /members/me/groups/... for GET; /groups/... for POST (send)
 PSN_MESSAGES_GET = PSN_MESSAGING_BASE + "/members/me/groups/{group_id}/threads/{group_id}/messages"
 PSN_MESSAGES_POST = PSN_MESSAGING_BASE + "/groups/{group_id}/threads/{group_id}/messages"
-PSN_MEDIA_GET = PSN_MESSAGING_BASE + "/members/me/groups/{group_id}/threads/{group_id}/messages/{message_uid}/contentList/0"
+PSN_UGC_BASE = "https://ugc.np.community.playstation.net/ugc/v1"
 
 
 class PSNMessenger:
@@ -68,37 +68,37 @@ class PSNMessenger:
         for msg in raw:
             sender_obj = msg.get("sender", {})
             msg_type = msg.get("messageType", 1)
-            if msg_type != 1:
-                logger.info("non-text message: type=%s uid=%s raw=%s", msg_type, msg.get("messageUid"), msg)
+            detail = msg.get("messageDetail", {})
+            ugc_id = (detail.get("videoMessageDetail") or {}).get("ugcId", "")
             messages.append({
                 "sender": sender_obj.get("onlineId", "unknown") if isinstance(sender_obj, dict) else str(sender_obj),
                 "body": msg.get("body", ""),
                 "timestamp": msg.get("createdTimestamp", msg.get("messageUid", "")),
                 "messageUid": msg.get("messageUid", ""),
                 "messageType": msg_type,
+                "ugcId": ugc_id,
                 "reactions": msg.get("reactions", []),
             })
         return messages
 
-    def download_media(self, message_uid: str) -> bytes | None:
-        """Download binary media content for a non-text message."""
-        url = PSN_MEDIA_GET.format(group_id=self._group_id, message_uid=message_uid)
-        with httpx.Client(timeout=30, follow_redirects=True) as client:
-            resp = client.get(url, headers=self._headers)
+    def download_clip(self, ugc_id: str) -> bytes | None:
+        """Download a PSN GameShare video clip by its UGC ID."""
+        # Step 1: get the download URL from the UGC metadata endpoint
+        meta_url = f"{PSN_UGC_BASE}/contents/{ugc_id}"
+        with httpx.Client(timeout=15, follow_redirects=True) as client:
+            meta = client.get(meta_url, headers=self._headers)
+        if meta.status_code != 200:
+            logger.error("ugc meta failed: %d %s", meta.status_code, meta.text[:200])
+            return None
+        download_url = meta.json().get("mediaDownloadUrl") or meta.json().get("contentUrl", "")
+        if not download_url:
+            logger.error("ugc meta: no download URL in response: %s", meta.text[:300])
+            return None
+        # Step 2: download the actual video bytes
+        with httpx.Client(timeout=60, follow_redirects=True) as client:
+            resp = client.get(download_url)
         if resp.status_code != 200:
-            logger.error("media download failed: %d %s", resp.status_code, resp.text[:200])
+            logger.error("clip download failed: %d", resp.status_code)
             return None
         return resp.content
-
-    def get_media_url(self, message_uid: str) -> str:
-        """Return the resolved (after redirect) CDN URL for a media message."""
-        url = PSN_MEDIA_GET.format(group_id=self._group_id, message_uid=message_uid)
-        with httpx.Client(timeout=15, follow_redirects=False) as client:
-            resp = client.get(url, headers=self._headers)
-        if resp.status_code in (301, 302, 303, 307, 308):
-            return resp.headers.get("location", "")
-        if resp.status_code == 200:
-            return url
-        logger.error("get_media_url failed: %d", resp.status_code)
-        return ""
 

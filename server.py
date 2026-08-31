@@ -823,14 +823,14 @@ _video_seen: set[str] = set()   # messageUids already forwarded (resets on resta
 _video_watcher_started = False
 
 
-def _forward_video_to_wa(message_uid: str) -> None:
+def _forward_video_to_wa(message_uid: str, ugc_id: str, sender: str) -> None:
     """Download PSN clip and POST to the WhatsApp bridge."""
     if not WA_BRIDGE_URL or not WA_GOOPERS_JID:
         logger.warning("video-forward: WA_BRIDGE_URL or WA_GOOPERS_JID not configured")
         return
 
-    logger.info("video-forward: downloading PSN clip uid=%s", message_uid)
-    media_bytes = psn_messenger.download_media(message_uid)
+    logger.info("video-forward: downloading PSN clip uid=%s ugcId=%s from %s", message_uid, ugc_id, sender)
+    media_bytes = psn_messenger.download_clip(ugc_id)
     if not media_bytes:
         logger.error("video-forward: download returned nothing for uid=%s", message_uid)
         return
@@ -845,7 +845,7 @@ def _forward_video_to_wa(message_uid: str) -> None:
 
     cdn_url = psn_messenger.get_media_url(message_uid)
     if cdn_url:
-        payload: dict = {"videoUrl": cdn_url, "groupJid": WA_GOOPERS_JID, "caption": "🎮"}
+        payload: dict = {"videoUrl": cdn_url, "groupJid": WA_GOOPERS_JID, "caption": f"🎮 {sender} shared a clip"}
         auth_hdr = None
     else:
         # CDN URL not available — save to temp file and serve via the psn-messenger API
@@ -858,7 +858,7 @@ def _forward_video_to_wa(message_uid: str) -> None:
         payload = {
             "videoUrl": f"http://host.docker.internal:3000/api/video-tmp/{tmp.name.split('/')[-1]}",
             "groupJid": WA_GOOPERS_JID,
-            "caption": "🎮",
+            "caption": f"🎮 {sender} shared a clip",
         }
         auth_hdr = None
 
@@ -921,10 +921,13 @@ async def _start_squad_poller():
                             continue
                         if msg.get("messageType", 1) == 1:
                             continue
-                        sender = (msg.get("sender") or "").lower()
+                        ugc_id = msg.get("ugcId", "")
+                        if not ugc_id:
+                            continue
+                        sender = msg.get("sender", "unknown")
                         _video_seen.add(uid)
-                        logger.info("video-watch: new clip from %s uid=%s type=%s", sender, uid, msg.get("messageType"))
-                        await asyncio.to_thread(_forward_video_to_wa, uid)
+                        logger.info("video-watch: new clip from %s uid=%s ugcId=%s", sender, uid, ugc_id)
+                        await asyncio.to_thread(_forward_video_to_wa, uid, ugc_id, sender)
                 except Exception as exc:  # noqa: BLE001
                     logger.debug("video-watch tick failed: %s", exc)
                 await asyncio.sleep(20)
