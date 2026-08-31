@@ -845,18 +845,19 @@ _video_seen: set[str] = set()       # all UIDs observed since startup
 _video_initialized: bool = False    # True after first seed poll
 
 
-def _forward_video_to_wa(message_uid: str, ugc_id: str, sender: str) -> None:
-    """Download PSN clip and POST to the WhatsApp bridge."""
+def _forward_video_to_wa(message_uid: str, ugc_id: str, sender: str) -> bool:
+    """Download PSN clip and POST to the WhatsApp bridge. Returns True on success."""
     if not WA_BRIDGE_URL or not WA_GOOPERS_JID:
         logger.warning("video-forward: WA_BRIDGE_URL or WA_GOOPERS_JID not configured")
-        return
+        return False
 
     import base64, httpx as _httpx
 
     video_bytes = psn_messenger.download_clip(ugc_id)
     if not video_bytes:
-        logger.error("video-forward: download failed uid=%s ugcId=%s", message_uid, ugc_id)
-        return
+        logger.warning("video-forward: download failed (may still be processing) uid=%s ugcId=%s",
+                       message_uid, ugc_id)
+        return False
 
     logger.info("video-forward: sending %d bytes uid=%s", len(video_bytes), message_uid)
     payload = {
@@ -868,10 +869,12 @@ def _forward_video_to_wa(message_uid: str, ugc_id: str, sender: str) -> None:
         r = _httpx.post(f"{WA_BRIDGE_URL}/send-video", json=payload, timeout=180)
         if r.status_code == 200:
             logger.info("video-forward: sent ok uid=%s", message_uid)
-        else:
-            logger.error("video-forward: WA bridge error %d %s", r.status_code, r.text[:200])
+            return True
+        logger.error("video-forward: WA bridge error %d %s", r.status_code, r.text[:200])
+        return False
     except Exception as exc:
         logger.error("video-forward: WA bridge request failed: %s", exc)
+        return False
 
 
 
@@ -925,7 +928,7 @@ async def _start_squad_poller():
                             sender = msg.get("sender", "unknown")
                             logger.info("video-watch: queuing clip from %s uid=%s ugcId=%s",
                                         sender, uid, ugc_id)
-                            await _video_queue.put((uid, ugc_id, sender))
+                            await _video_queue.put((uid, ugc_id, sender, 1))
                 except Exception as exc:  # noqa: BLE001
                     logger.error("video-watch tick failed: %s", exc)
                 finally:
@@ -937,9 +940,19 @@ async def _start_squad_poller():
 
         async def _video_forward_worker():
             while True:
-                uid, ugc_id, sender = await _video_queue.get()
+                uid, ugc_id, sender, attempt = await _video_queue.get()
                 try:
-                    await asyncio.to_thread(_forward_video_to_wa, uid, ugc_id, sender)
+                    ok = await asyncio.to_thread(_forward_video_to_wa, uid, ugc_id, sender)
+                    if not ok and attempt < 3:
+                        delay = 30 * attempt  # 30s, 60s, 90s
+                        logger.info("video-forward: will retry uid=%s in %ds (attempt %d/3)",
+                                    uid, delay, attempt)
+                        async def _requeue(u=uid, g=ugc_id, s=sender, a=attempt, d=delay):
+                            await asyncio.sleep(d)
+                            await _video_queue.put((u, g, s, a + 1))
+                        asyncio.create_task(_requeue())
+                    elif not ok:
+                        logger.error("video-forward: giving up after 3 attempts uid=%s", uid)
                 except Exception as exc:  # noqa: BLE001
                     logger.error("video-forward worker error: %s", exc)
                 finally:
