@@ -239,12 +239,33 @@ class PSNMessenger:
             })
         return messages
 
-    def get_messages_raw(self, limit: int = 10) -> dict:
+    def get_messages_raw(self, limit: int = 10, before_uid: str | None = None) -> dict:
         url = PSN_MESSAGES_GET.format(group_id=self._group_id)
+        params: dict = {"limit": str(limit), "includeReactions": "true"}
+        if before_uid:
+            params["taggerId"] = before_uid
         with httpx.Client(timeout=15) as client:
-            resp = client.get(url, params={"limit": str(limit), "includeReactions": "true"},
-                              headers=self._headers)
+            resp = client.get(url, params=params, headers=self._headers)
         return resp.json() if resp.status_code == 200 else {"error": resp.status_code}
+
+    def get_messages_page(self, limit: int = 100, before_uid: str | None = None) -> list[dict]:
+        """Fetch a page of messages, optionally starting before before_uid."""
+        data = self.get_messages_raw(limit=limit, before_uid=before_uid)
+        raw = data.get("messages") or data.get("threadMessages") or []
+        result = []
+        for msg in raw:
+            sender_obj = msg.get("sender", {})
+            detail = msg.get("messageDetail", {})
+            ugc_id = (detail.get("videoMessageDetail") or {}).get("ugcId", "")
+            result.append({
+                "sender": (sender_obj.get("onlineId", "unknown")
+                           if isinstance(sender_obj, dict) else str(sender_obj)),
+                "messageUid": msg.get("messageUid", ""),
+                "messageType": msg.get("messageType", 1),
+                "ugcId": ugc_id,
+                "timestamp": msg.get("createdTimestamp", ""),
+            })
+        return result
 
     def _gms_headers(self) -> dict[str, str]:
         return {

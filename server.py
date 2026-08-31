@@ -1277,6 +1277,75 @@ def api_pipeline_status():
     }
 
 
+@app.post("/api/scan-group")
+async def api_scan_group(max_pages: int = 10):
+    """Page back through group history and queue any unprocessed video clips.
+
+    Paginates using beforeMessageUid up to max_pages×100 messages back.
+    Clips already in the DB are skipped. Returns counts of found/queued clips.
+    """
+    if not _v2_available:
+        raise HTTPException(503, "PSN auth not available")
+    if _video_queue is None:
+        raise HTTPException(503, "clip queue not initialized")
+
+    found = 0
+    queued = 0
+    skipped = 0
+    before_uid: str | None = None
+    pages_fetched = 0
+
+    for wm in _watched_messengers:
+        before_uid = None
+        for _ in range(max_pages):
+            try:
+                msgs = await asyncio.to_thread(wm.get_messages_page, 100, before_uid)
+            except Exception as exc:
+                logger.error("scan-group: fetch failed: %s", exc)
+                break
+
+            if not msgs:
+                break
+
+            pages_fetched += 1
+            for msg in msgs:
+                uid = msg["messageUid"]
+                if not uid:
+                    continue
+                if msg["messageType"] != 210:
+                    continue
+                ugc_id = msg["ugcId"]
+                if not ugc_id:
+                    continue
+                found += 1
+                sender = msg["sender"]
+                ts_raw = msg.get("timestamp")
+                psn_ts_ms: int | None = None
+                try:
+                    psn_ts_ms = int(ts_raw) if ts_raw else None
+                except (ValueError, TypeError):
+                    pass
+
+                is_new = _clips.claim(
+                    uid, ugc_id, wm._group_id, wm._group_name, sender, psn_ts_ms,
+                )
+                if is_new:
+                    _video_seen.add(uid)
+                    await _video_queue.put(uid)
+                    logger.info("scan-group: queued uid=%s ugcId=%s sender=%s", uid, ugc_id, sender)
+                    queued += 1
+                else:
+                    skipped += 1
+
+            # Paginate: use the oldest message uid as the cursor
+            before_uid = msgs[-1]["messageUid"]
+            if len(msgs) < 100:
+                break  # last page
+
+    logger.info("scan-group: pages=%d found=%d queued=%d skipped=%d", pages_fetched, found, queued, skipped)
+    return {"pages_fetched": pages_fetched, "video_msgs_found": found, "queued": queued, "already_known": skipped}
+
+
 @app.get("/status")
 def status():
     """Lightweight operational status for monitoring."""
