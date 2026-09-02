@@ -210,6 +210,42 @@ class PSNMessenger:
         logger.error("v2: Send failed: %d %s", resp.status_code, resp.text[:200])
         return False
 
+    @staticmethod
+    def _extract_image_urls(detail: dict) -> list[str]:
+        """Return any image URLs found in a messageDetail block.
+
+        PSN uses several detail shapes for images depending on source
+        (screenshot share, activity, direct image upload):
+          imageMessageDetail.imageUrls  — direct image messages
+          activityMessageDetail.*.imageUrls — activity screenshot shares
+        """
+        urls: list[str] = []
+        img_detail = detail.get("imageMessageDetail") or {}
+        for url in img_detail.get("imageUrls") or []:
+            if url:
+                urls.append(url)
+        act_detail = detail.get("activityMessageDetail") or {}
+        for url in act_detail.get("imageUrls") or []:
+            if url:
+                urls.append(url)
+        # Fallback: any key that ends in imageUrl(s)
+        for key, val in detail.items():
+            if "image" in key.lower() and isinstance(val, dict):
+                for sub_key, sub_val in val.items():
+                    if "url" in sub_key.lower():
+                        if isinstance(sub_val, str) and sub_val.startswith("http"):
+                            urls.append(sub_val)
+                        elif isinstance(sub_val, list):
+                            urls += [u for u in sub_val if isinstance(u, str) and u.startswith("http")]
+        return list(dict.fromkeys(urls))  # deduplicate, preserve order
+
+    def download_image(self, image_url: str) -> bytes:
+        """Download an image from a PSN URL using auth headers."""
+        with httpx.Client(timeout=30) as client:
+            r = client.get(image_url, headers=self._headers)
+        r.raise_for_status()
+        return r.content
+
     def get_messages(self, limit: int = 5) -> list[dict]:
         """Get recent messages from the group."""
         url = PSN_MESSAGES_GET.format(group_id=self._group_id)
@@ -225,8 +261,9 @@ class PSNMessenger:
         for msg in raw:
             sender_obj = msg.get("sender", {})
             msg_type = msg.get("messageType", 1)
-            detail = msg.get("messageDetail", {})
+            detail = msg.get("messageDetail") or {}
             ugc_id = (detail.get("videoMessageDetail") or {}).get("ugcId", "")
+            image_urls = self._extract_image_urls(detail)
             messages.append({
                 "sender": (sender_obj.get("onlineId", "unknown")
                            if isinstance(sender_obj, dict) else str(sender_obj)),
@@ -235,6 +272,7 @@ class PSNMessenger:
                 "messageUid": msg.get("messageUid", ""),
                 "messageType": msg_type,
                 "ugcId": ugc_id,
+                "imageUrls": image_urls,
                 "reactions": msg.get("reactions", []),
             })
         return messages

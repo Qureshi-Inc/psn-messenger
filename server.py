@@ -858,6 +858,30 @@ def _messenger_for_group(group_id: str):
     return None
 
 
+async def _forward_image(uid: str, image_url: str, sender: str, body: str, wm) -> None:
+    """Download a PSN image using auth headers and forward it to WhatsApp."""
+    import base64
+    import httpx as _httpx
+
+    if not WA_BRIDGE_URL or not WA_GOOPERS_JID:
+        return
+    try:
+        logger.info("image_forward_started uid=%s sender=%s", uid, sender)
+        image_bytes = await asyncio.to_thread(wm.download_image, image_url)
+        caption = f"{sender}: {body}" if body else sender
+        payload = {
+            "imageBase64": base64.b64encode(image_bytes).decode(),
+            "groupJid": WA_GOOPERS_JID,
+            "caption": caption,
+            "idempotencyKey": f"psn-img:{uid}",
+        }
+        async with _httpx.AsyncClient(timeout=60) as client:
+            resp = await client.post(f"{WA_BRIDGE_URL}/send-image", json=payload)
+        logger.info("image_forward_sent uid=%s status=%d", uid, resp.status_code)
+    except Exception as exc:
+        logger.error("image_forward_failed uid=%s: %s", uid, exc)
+
+
 def _send_to_wa(message_uid: str, video_bytes: bytes, sender: str) -> str | None:
     """POST video bytes to slaptastic. Returns wa_message_id or None."""
     import base64
@@ -997,12 +1021,24 @@ async def _start_squad_poller():
                                                          psn_ts_ms / 1000.0)
                                 continue
 
-                            if msg.get("messageType", 1) != 210:
+                            msg_type = msg.get("messageType", 1)
+                            sender = msg.get("sender", "unknown")
+
+                            # Image messages — forward photo + text to WhatsApp
+                            image_urls = msg.get("imageUrls") or []
+                            if image_urls:
+                                body_text = msg.get("body", "") or ""
+                                asyncio.create_task(
+                                    _forward_image(uid, image_urls[0], sender, body_text, wm)
+                                )
+                                continue
+
+                            # Video clip messages
+                            if msg_type != 210:
                                 continue
                             ugc_id = msg.get("ugcId", "")
                             if not ugc_id:
                                 continue
-                            sender = msg.get("sender", "unknown")
                             is_new = _clips.claim(
                                 uid, ugc_id, wm._group_id, wm._group_name,
                                 sender, psn_ts_ms,
