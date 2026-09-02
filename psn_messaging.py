@@ -246,6 +246,17 @@ class PSNMessenger:
         r.raise_for_status()
         return r.content
 
+    def resolve_and_download_screenshot(self, ugc_id: str) -> bytes:
+        """Resolve a screenshot ugcId to a URL and download the full-res image."""
+        urls = self._get_clip_urls(ugc_id)
+        img_url = urls.get("screenshotUrl") or urls.get("largePreviewImage")
+        if not img_url:
+            raise ClipError(f"no image URL for ugcId={ugc_id}: {list(urls.keys())}")
+        with httpx.Client(timeout=30, follow_redirects=True) as client:
+            r = client.get(img_url)
+        r.raise_for_status()
+        return r.content
+
     def get_messages(self, limit: int = 5) -> list[dict]:
         """Get recent messages from the group."""
         url = PSN_MESSAGES_GET.format(group_id=self._group_id)
@@ -263,6 +274,7 @@ class PSNMessenger:
             msg_type = msg.get("messageType", 1)
             detail = msg.get("messageDetail") or {}
             ugc_id = (detail.get("videoMessageDetail") or {}).get("ugcId", "")
+            screenshot_ugc_id = (detail.get("imageMessageDetail") or {}).get("ugcId", "")
             image_urls = self._extract_image_urls(detail)
             messages.append({
                 "sender": (sender_obj.get("onlineId", "unknown")
@@ -272,6 +284,7 @@ class PSNMessenger:
                 "messageUid": msg.get("messageUid", ""),
                 "messageType": msg_type,
                 "ugcId": ugc_id,
+                "screenshotUgcId": screenshot_ugc_id,
                 "imageUrls": image_urls,
                 "reactions": msg.get("reactions", []),
             })

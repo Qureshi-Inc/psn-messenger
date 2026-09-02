@@ -858,6 +858,30 @@ def _messenger_for_group(group_id: str):
     return None
 
 
+async def _forward_screenshot(uid: str, ugc_id: str, sender: str, body: str, wm) -> None:
+    """Resolve a PSN screenshot ugcId, download it, and forward to WhatsApp."""
+    import base64
+    import httpx as _httpx
+
+    if not WA_BRIDGE_URL or not WA_GOOPERS_JID:
+        return
+    try:
+        logger.info("screenshot_forward_started uid=%s ugcId=%s sender=%s", uid, ugc_id, sender)
+        image_bytes = await asyncio.to_thread(wm.resolve_and_download_screenshot, ugc_id)
+        caption = f"{sender}: {body}" if body else sender
+        payload = {
+            "imageBase64": base64.b64encode(image_bytes).decode(),
+            "groupJid": WA_GOOPERS_JID,
+            "caption": caption,
+            "idempotencyKey": f"psn-img:{uid}",
+        }
+        async with _httpx.AsyncClient(timeout=60) as client:
+            resp = await client.post(f"{WA_BRIDGE_URL}/send-image", json=payload)
+        logger.info("screenshot_forward_sent uid=%s status=%d", uid, resp.status_code)
+    except Exception as exc:
+        logger.error("screenshot_forward_failed uid=%s: %s", uid, exc)
+
+
 async def _forward_image(uid: str, image_url: str, sender: str, body: str, wm) -> None:
     """Download a PSN image using auth headers and forward it to WhatsApp."""
     import base64
@@ -1024,12 +1048,12 @@ async def _start_squad_poller():
                             msg_type = msg.get("messageType", 1)
                             sender = msg.get("sender", "unknown")
 
-                            # Image messages — forward photo + text to WhatsApp
-                            image_urls = msg.get("imageUrls") or []
-                            if image_urls:
+                            # Screenshot messages (type 3) — resolve ugcId and forward
+                            screenshot_ugc_id = msg.get("screenshotUgcId") or ""
+                            if msg_type == 3 and screenshot_ugc_id:
                                 body_text = msg.get("body", "") or ""
                                 asyncio.create_task(
-                                    _forward_image(uid, image_urls[0], sender, body_text, wm)
+                                    _forward_screenshot(uid, screenshot_ugc_id, sender, body_text, wm)
                                 )
                                 continue
 
