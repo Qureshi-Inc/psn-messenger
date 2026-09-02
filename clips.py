@@ -68,6 +68,8 @@ def init() -> None:
                 storage_key_normalized  TEXT,
                 normalization_status    TEXT NOT NULL DEFAULT 'not_requested',
 
+                body                    TEXT,
+
                 wa_message_id           TEXT,
                 whatsapp_delivered_at   REAL,
 
@@ -87,6 +89,11 @@ def init() -> None:
             )
         """)
         db.commit()
+        # Migrations
+        cols = {r[1] for r in db.execute("PRAGMA table_info(clips)")}
+        if "body" not in cols:
+            db.execute("ALTER TABLE clips ADD COLUMN body TEXT")
+            db.commit()
     logger.info("clips: DB ready at %s", _DB_PATH)
 
 
@@ -97,6 +104,7 @@ def claim(
     group_name: str,
     sender: str,
     psn_created_ms: int | None = None,
+    body: str = "",
 ) -> bool:
     """Insert clip if not already known. Returns True if this is a new clip."""
     now = time.time()
@@ -106,10 +114,10 @@ def claim(
             """INSERT OR IGNORE INTO clips
                (message_uid, ugc_id, psn_group_id, psn_group_name,
                 sender_online_id, psn_created_at, discovered_at,
-                next_attempt_at, created_at, updated_at)
-               VALUES (?, ?, ?, ?, ?, ?, ?, 0.0, ?, ?)""",
+                body, next_attempt_at, created_at, updated_at)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?, 0.0, ?, ?)""",
             (message_uid, ugc_id, group_id, group_name,
-             sender, psn_created_at, now, now, now),
+             sender, psn_created_at, now, body or None, now, now),
         )
         db.commit()
         return db.execute("SELECT changes()").fetchone()[0] > 0

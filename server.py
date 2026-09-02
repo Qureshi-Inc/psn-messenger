@@ -906,12 +906,12 @@ async def _forward_image(uid: str, image_url: str, sender: str, body: str, wm) -
         logger.error("image_forward_failed uid=%s: %s", uid, exc)
 
 
-def _send_to_wa(message_uid: str, video_bytes: bytes, sender: str) -> str | None:
+def _send_to_wa(message_uid: str, video_bytes: bytes, sender: str, body: str = "") -> str | None:
     """POST video bytes to slaptastic. Returns wa_message_id or None."""
     import base64
     import httpx as _httpx
 
-    caption = f"{sender} shared a video."
+    caption = f"🎮 {sender}: {body}" if body else f"🎮 {sender}"
     idempotency_key = f"psn:{message_uid}"
 
     payload = {
@@ -944,6 +944,7 @@ def _process_clip_job(message_uid: str, job: dict) -> str | None:
     ugc_id   = job["ugc_id"]
     sender   = job["sender_online_id"]
     group_id = job.get("psn_group_id", "")
+    body     = job.get("body") or ""
 
     # ── Resume from archive if available ──────────────────────────────────────
     storage_key = job.get("storage_key_original")
@@ -952,7 +953,7 @@ def _process_clip_job(message_uid: str, job: dict) -> str | None:
         video_bytes = _cstore.load(storage_key)
         if not video_bytes:
             raise ClipError(f"archived clip missing from store: {storage_key}")
-        return _send_to_wa(message_uid, video_bytes, sender)
+        return _send_to_wa(message_uid, video_bytes, sender, body)
 
     # ── Resolve + download ────────────────────────────────────────────────────
     _clips.mark(message_uid, _clips.RESOLVING)
@@ -985,7 +986,7 @@ def _process_clip_job(message_uid: str, job: dict) -> str | None:
     )
 
     # ── Send ─────────────────────────────────────────────────────────────────
-    return _send_to_wa(message_uid, result.data, sender)
+    return _send_to_wa(message_uid, result.data, sender, body)
 
 
 
@@ -1063,9 +1064,10 @@ async def _start_squad_poller():
                             ugc_id = msg.get("ugcId", "")
                             if not ugc_id:
                                 continue
+                            body_text = msg.get("body", "") or ""
                             is_new = _clips.claim(
                                 uid, ugc_id, wm._group_id, wm._group_name,
-                                sender, psn_ts_ms,
+                                sender, psn_ts_ms, body_text,
                             )
                             if is_new:
                                 logger.info(
