@@ -1022,12 +1022,38 @@ async def _start_squad_poller():
         _video_queue = asyncio.Queue()
 
         async def _video_detect_loop():
+            def _adjacent_caption(msgs: list[dict], idx: int, sender: str,
+                                   window_ms: int = 5000) -> str:
+                """Return the body of a type-1 message from the same sender
+                within window_ms of msgs[idx], or '' if none found."""
+                try:
+                    ts0 = int(msgs[idx].get("timestamp") or 0)
+                except (ValueError, TypeError):
+                    return ""
+                for j in range(max(0, idx - 3), min(len(msgs), idx + 4)):
+                    if j == idx:
+                        continue
+                    m = msgs[j]
+                    if m.get("messageType") != 1:
+                        continue
+                    if m.get("sender") != sender:
+                        continue
+                    try:
+                        delta = abs(int(m.get("timestamp") or 0) - ts0)
+                    except (ValueError, TypeError):
+                        continue
+                    if delta <= window_ms:
+                        body = (m.get("body") or "").strip()
+                        if body:
+                            return body
+                return ""
+
             global _video_initialized
             while True:
                 try:
                     for wm in _watched_messengers:
                         msgs = await asyncio.to_thread(wm.get_messages, 10)
-                        for msg in msgs:
+                        for idx, msg in enumerate(msgs):
                             uid = msg.get("messageUid", "")
                             if not uid or uid in _video_seen:
                                 continue
@@ -1055,7 +1081,7 @@ async def _start_squad_poller():
                             # Screenshot messages (type 3) — resolve ugcId and forward
                             screenshot_ugc_id = msg.get("screenshotUgcId") or ""
                             if msg_type == 3 and screenshot_ugc_id:
-                                body_text = msg.get("body", "") or ""
+                                body_text = _adjacent_caption(msgs, idx, sender)
                                 asyncio.create_task(
                                     _forward_screenshot(uid, screenshot_ugc_id, sender, body_text, wm)
                                 )
@@ -1067,7 +1093,7 @@ async def _start_squad_poller():
                             ugc_id = msg.get("ugcId", "")
                             if not ugc_id:
                                 continue
-                            body_text = msg.get("body", "") or ""
+                            body_text = _adjacent_caption(msgs, idx, sender)
                             is_new = _clips.claim(
                                 uid, ugc_id, wm._group_id, wm._group_name,
                                 sender, psn_ts_ms, body_text,
