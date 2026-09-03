@@ -911,7 +911,10 @@ def _send_to_wa(message_uid: str, video_bytes: bytes, sender: str, body: str = "
     import base64
     import httpx as _httpx
 
-    caption = f"🎮 {sender}: {body}" if body else f"🎮 {sender}"
+    # PSN auto-generates "X sent a video clip." — not a real user caption
+    import re as _re
+    real_body = body if body and not _re.fullmatch(r'.+ sent a video clip\.', body, _re.IGNORECASE) else ""
+    caption = f"🎮 {sender}: {real_body}" if real_body else f"🎮 {sender}"
     idempotency_key = f"psn:{message_uid}"
 
     payload = {
@@ -1474,6 +1477,39 @@ def api_clip_detail(message_uid: str):
     if not row:
         raise HTTPException(status_code=404, detail="clip not found")
     return row
+
+
+@app.post("/api/clips/{message_uid:path}/resend")
+def api_clip_resend(message_uid: str):
+    """Force-resend a delivered clip to WhatsApp with a new idempotency key."""
+    import base64 as _b64, time as _t
+    job = _clips.get(message_uid)
+    if not job:
+        raise HTTPException(status_code=404, detail="clip not found")
+    if not WA_BRIDGE_URL or not WA_GOOPERS_JID:
+        raise HTTPException(status_code=503, detail="WA bridge not configured")
+    storage_key = job.get("storage_key_original")
+    if not storage_key:
+        raise HTTPException(status_code=409, detail="clip not yet archived")
+    video_bytes = _cstore.load(storage_key)
+    if not video_bytes:
+        raise HTTPException(status_code=410, detail="archived clip missing from store")
+    sender = job.get("sender_online_id", "unknown")
+    body   = job.get("body") or ""
+    import re as _re
+    real_body = body if body and not _re.fullmatch(r'.+ sent a video clip\.', body, _re.IGNORECASE) else ""
+    caption = f"🎮 {sender}: {real_body}" if real_body else f"🎮 {sender}"
+    import httpx as _httpx
+    payload = {
+        "videoBase64": _b64.b64encode(video_bytes).decode(),
+        "groupJid": WA_GOOPERS_JID,
+        "caption": caption,
+        "idempotencyKey": f"psn:{message_uid}:r{int(_t.time())}",
+    }
+    r = _httpx.post(f"{WA_BRIDGE_URL}/send-video", json=payload, timeout=180)
+    if r.status_code != 200:
+        raise HTTPException(status_code=502, detail=f"WA bridge: {r.text[:200]}")
+    return {"status": "sent", "caption": caption, "wa": r.json()}
 
 
 @app.get("/api/squad")

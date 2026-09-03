@@ -372,11 +372,13 @@ def _squad_status_uncached(auth, include_stats: bool = True) -> list[dict]:
             # On first population, stagger each user's expiry evenly across the
             # day so they never all expire simultaneously.
             slow = _slow_cache.get(a["account_id"])
-            if not slow or (time.time() - slow["at"]) > _SLOW_TTL:
+            needs_stats = include_stats and (not slow or not slow.get("has_stats"))
+            if not slow or (time.time() - slow["at"]) > _SLOW_TTL or needs_stats:
                 is_first = slow is None
                 stagger = i * (_SLOW_TTL / max(len(accounts), 1)) if is_first else 0
                 slow = {
                     "at": time.time() + stagger,
+                    "has_stats": include_stats,
                     "avatar": _avatar(client, bot_token, a.get("online_id")),
                     "trophy": _trophy_summary(client, tok, a["account_id"], own)
                     if include_stats else {},
