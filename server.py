@@ -82,9 +82,7 @@ def _is_emoji_only(text: str) -> bool:
     t = text.strip()
     return bool(t) and len(t) <= 30 and not _re.search(r'[a-zA-Z0-9]', t)
 
-# Emoji reaction polling state (in-memory, resets on container restart).
-_reaction_seen: set[str] = set()
-_reaction_initialized: bool = False
+# Reaction snapshot cache — shared across clients; each browser tracks its own seen IDs.
 _reaction_cache: dict = {"ts": 0.0, "data": {"reactions": []}}
 _REACTION_CACHE_TTL = 2.0
 
@@ -1550,8 +1548,8 @@ def api_squad():
         return JSONResponse({"squad": [], "error": str(e)}, status_code=500)
 
 
-def _fetch_messages_for_reactions(limit: int = 10) -> list[dict]:
-    """Fetch recent group messages using v2 auth (correct /members/me/ URL)."""
+def _fetch_messages_for_reactions(limit: int = 20) -> list[dict]:
+    """Fetch recent group messages, preserving messageUid for stable reaction IDs."""
     if _v2_available:
         return psn_messenger.get_messages(limit)
     # fallback: psnawp
@@ -1561,54 +1559,50 @@ def _fetch_messages_for_reactions(limit: int = 10) -> list[dict]:
     for m in raw:
         s = m.get("sender", {})
         msgs.append({
+            "messageUid": str(m.get("messageUid", "")),
             "sender": s.get("onlineId", "unknown") if isinstance(s, dict) else str(s),
             "body": str(m.get("body", "")),
-            "timestamp": str(m.get("createdTimestamp", m.get("messageUid", ""))),
+            "timestamp": str(m.get("createdTimestamp", "")),
         })
     return msgs
 
 
 @app.get("/api/reactions")
 def api_reactions():
-    """Return new emoji-only messages since last poll — fires confetti on the webapp.
+    """Return recent emoji-only reactions as a stable snapshot.
 
-    PSN's built-in reaction button is not accessible via their API; confetti
-    fires when a squad member sends a text message that is pure emoji (e.g. 🔥).
-    Cached for 2 s to avoid hammering the PSN API from multiple open tabs.
-    First call establishes the baseline so startup doesn't replay old messages.
+    Each browser maintains its own seen-ID set in localStorage — the server
+    never decides what's "new" for a particular client, so desktop and mobile
+    both fire confetti independently rather than competing for the same event.
+    Snapshot is cached for 2 s so multiple open tabs share one PSN API hit.
     """
-    global _reaction_seen, _reaction_initialized, _reaction_cache
+    global _reaction_cache
     now = _time.time()
     if now - _reaction_cache["ts"] < _REACTION_CACHE_TTL:
         return _reaction_cache["data"]
     try:
-        messages = _fetch_messages_for_reactions(10)
+        messages = _fetch_messages_for_reactions(20)
     except Exception as e:  # noqa: BLE001
         logger.warning("reactions: get_messages failed: %s", e)
-        return {"reactions": []}
+        return _reaction_cache["data"]
 
-    msg_keys = {f"{m['sender']}:{m['timestamp']}:{m['body']}" for m in messages}
-
-    if not _reaction_initialized:
-        _reaction_seen = msg_keys
-        _reaction_initialized = True
-        result: dict = {"reactions": []}
-        _reaction_cache = {"ts": now, "data": result}
-        return result
-
-    new_reactions = []
+    reactions = []
     for msg in messages:
-        key = f"{msg['sender']}:{msg['timestamp']}:{msg['body']}"
-        is_new = key not in _reaction_seen
-        is_emoji = _is_emoji_only(msg["body"])
-        if is_new:
-            logger.info("reactions: new msg from %s body=%r emoji_only=%s",
-                        msg["sender"], msg["body"][:30], is_emoji)
-        if is_new and is_emoji:
-            new_reactions.append({"sender": msg["sender"], "emoji": msg["body"].strip()})
+        body = (msg.get("body") or "").strip()
+        if not _is_emoji_only(body):
+            continue
+        reaction_id = str(
+            msg.get("messageUid")
+            or f"{msg['sender']}:{msg['timestamp']}:{body}"
+        )
+        reactions.append({
+            "id": reaction_id,
+            "sender": msg.get("sender", ""),
+            "emoji": body,
+            "timestamp": msg.get("timestamp", ""),
+        })
 
-    _reaction_seen = msg_keys
-    result = {"reactions": new_reactions}
+    result: dict = {"reactions": reactions}
     _reaction_cache = {"ts": now, "data": result}
     return result
 
@@ -1940,7 +1934,7 @@ _DASHBOARD_TMPL = r"""<!doctype html>
     border-radius:13px; font-size:14px; opacity:0; pointer-events:none; transition:opacity .2s;
     z-index:50; box-shadow:0 12px 30px rgba(0,0,0,.5); }
   .toast.show { opacity:1; }
-  #confetti-canvas { position:fixed; top:0; left:0; right:0; bottom:0; width:100%; height:100%; z-index:999; pointer-events:none; display:block; }
+  #confetti-canvas { position:fixed; inset:0; width:100vw; height:100dvh; z-index:999999; pointer-events:none; display:block; }
 
   /* ── Pipeline / Montage panel ── */
   .pip-section { margin-bottom:14px; }
@@ -2252,64 +2246,97 @@ async function loadSquad(){
 }
 loadSquad(); setInterval(loadSquad, 30000);
 
-// Emoji confetti
+// ── Confetti ──────────────────────────────────────────────────────────────────
 let _cfFrame = null;
+function _prepareConfettiCanvas(cvs) {
+  const vp = window.visualViewport;
+  const W = vp ? vp.width  : window.innerWidth;
+  const H = vp ? vp.height : window.innerHeight;
+  const dpr = Math.min(window.devicePixelRatio || 1, 2);
+  cvs.style.width  = W + 'px';
+  cvs.style.height = H + 'px';
+  cvs.width  = Math.round(W * dpr);
+  cvs.height = Math.round(H * dpr);
+  const ctx = cvs.getContext('2d');
+  ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+  return { ctx, W, H };
+}
 function fireConfetti(emoji) {
   const cvs = $('confetti-canvas');
-  const ctx = cvs.getContext('2d');
-  // Use innerWidth/Height (layout viewport) — matches position:fixed coordinate space.
-  // Scale by devicePixelRatio so emoji are crisp on Retina/high-DPI mobile screens.
-  const dpr = window.devicePixelRatio || 1;
-  const W = window.innerWidth, H = window.innerHeight;
-  cvs.width  = W * dpr;
-  cvs.height = H * dpr;
-  ctx.scale(dpr, dpr);
+  if (!cvs) return;
+  const { ctx, W, H } = _prepareConfettiCanvas(cvs);
   const parts = Array.from({length:48}, () => ({
-    x: Math.random() * W,
-    y: -20 - Math.random() * 100,
-    vx: (Math.random() - 0.5) * 5,
-    vy: 2.5 + Math.random() * 3,
+    x: Math.random() * W, y: -20 - Math.random() * 100,
+    vx: (Math.random() - 0.5) * 5, vy: 2.5 + Math.random() * 3,
     sz: 22 + Math.random() * 24,
-    rot: Math.random() * Math.PI * 2,
-    rv: (Math.random() - 0.5) * 0.15,
+    rot: Math.random() * Math.PI * 2, rv: (Math.random() - 0.5) * 0.15,
     a: 1,
   }));
   if (_cfFrame) cancelAnimationFrame(_cfFrame);
-  const EMOJI_FONT = "Apple Color Emoji,Segoe UI Emoji,Noto Color Emoji,serif";
+  const EMOJI_FONT = '"Apple Color Emoji","Segoe UI Emoji","Noto Color Emoji",sans-serif';
   function tick() {
     ctx.clearRect(0, 0, W, H);
     let any = false;
     for (const p of parts) {
       p.x += p.vx; p.y += p.vy; p.vy += 0.12; p.rot += p.rv;
       if (p.y > H * 0.72) p.a -= 0.022;
-      if (p.a > 0) { any = true;
-        ctx.save(); ctx.globalAlpha = p.a;
-        ctx.translate(p.x, p.y); ctx.rotate(p.rot);
-        ctx.font = p.sz + 'px ' + EMOJI_FONT;
-        ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
-        ctx.fillText(emoji, 0, 0); ctx.restore(); }
+      if (p.a <= 0) continue;
+      any = true;
+      ctx.save(); ctx.globalAlpha = p.a;
+      ctx.translate(p.x, p.y); ctx.rotate(p.rot);
+      ctx.font = p.sz + 'px ' + EMOJI_FONT;
+      ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
+      ctx.fillText(emoji, 0, 0); ctx.restore();
     }
     if (any) _cfFrame = requestAnimationFrame(tick);
-    else ctx.clearRect(0, 0, W, H);
+    else { ctx.clearRect(0, 0, W, H); _cfFrame = null; }
   }
   tick();
 }
 
-// Debug: tap the live-count header to test confetti locally
-$('livecount').addEventListener('click', () => fireConfetti(['🔥','💀','👑','😂'][Math.floor(Math.random()*4)]));
+// Debug: tap live-count to test confetti — guarded so a missing element doesn't crash JS
+const _lcEl = $('livecount');
+if (_lcEl) _lcEl.addEventListener('click', () => fireConfetti(['🔥','💀','👑','😂'][Math.floor(Math.random()*4)]));
 
-// Poll for new emoji reactions every 5 s
+// ── Reaction polling — each browser owns its seen-ID set ──────────────────────
+const _REACTION_KEY = 'psn_seen_reactions_v1';
+function _getSeenReactions() {
+  try { return new Set(JSON.parse(localStorage.getItem(_REACTION_KEY) || '[]')); }
+  catch { return new Set(); }
+}
+function _saveSeenReactions(seen) {
+  try { localStorage.setItem(_REACTION_KEY, JSON.stringify(Array.from(seen).slice(-200))); }
+  catch {}
+}
+let _seenReactions = _getSeenReactions();
+let _reactionsInitialized = false;
+
 async function pollReactions() {
   try {
-    const d = await (await fetch('/api/reactions')).json();
-    (d.reactions || []).forEach(r => {
+    const res = await fetch('/api/reactions', { cache: 'no-store' });
+    if (!res.ok) return;
+    const { reactions = [] } = await res.json();
+    if (!_reactionsInitialized) {
+      reactions.forEach(r => _seenReactions.add(r.id));
+      _saveSeenReactions(_seenReactions);
+      _reactionsInitialized = true;
+      return;
+    }
+    for (const r of reactions) {
+      if (_seenReactions.has(r.id)) continue;
+      _seenReactions.add(r.id);
       fireConfetti(r.emoji);
       toast(r.sender + ' reacted ' + r.emoji);
-    });
-  } catch(e) {}
+    }
+    _saveSeenReactions(_seenReactions);
+  } catch(e) { console.warn('reaction poll failed', e); }
 }
 setInterval(pollReactions, 2000);
 pollReactions();
+// Poll immediately when returning to tab/focus (iOS background throttling)
+document.addEventListener('visibilitychange', () => { if (document.visibilityState === 'visible') pollReactions(); });
+window.addEventListener('focus', pollReactions);
+window.addEventListener('pageshow', pollReactions);
 
 // ── Pipeline / Montage status ──────────────────────────────────────────────
 function fmtAgo(ts) {
