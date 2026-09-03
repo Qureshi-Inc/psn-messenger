@@ -1940,7 +1940,7 @@ _DASHBOARD_TMPL = r"""<!doctype html>
     border-radius:13px; font-size:14px; opacity:0; pointer-events:none; transition:opacity .2s;
     z-index:50; box-shadow:0 12px 30px rgba(0,0,0,.5); }
   .toast.show { opacity:1; }
-  #confetti-canvas { position:fixed; inset:0; z-index:999; pointer-events:none; }
+  #confetti-canvas { position:fixed; top:0; left:0; right:0; bottom:0; width:100%; height:100%; z-index:999; pointer-events:none; display:block; }
 
   /* ── Pipeline / Montage panel ── */
   .pip-section { margin-bottom:14px; }
@@ -2257,11 +2257,15 @@ let _cfFrame = null;
 function fireConfetti(emoji) {
   const cvs = $('confetti-canvas');
   const ctx = cvs.getContext('2d');
-  const vp = window.visualViewport || window;
-  cvs.width = vp.width || window.innerWidth;
-  cvs.height = vp.height || window.innerHeight;
+  // Use innerWidth/Height (layout viewport) — matches position:fixed coordinate space.
+  // Scale by devicePixelRatio so emoji are crisp on Retina/high-DPI mobile screens.
+  const dpr = window.devicePixelRatio || 1;
+  const W = window.innerWidth, H = window.innerHeight;
+  cvs.width  = W * dpr;
+  cvs.height = H * dpr;
+  ctx.scale(dpr, dpr);
   const parts = Array.from({length:48}, () => ({
-    x: Math.random() * cvs.width,
+    x: Math.random() * W,
     y: -20 - Math.random() * 100,
     vx: (Math.random() - 0.5) * 5,
     vy: 2.5 + Math.random() * 3,
@@ -2273,11 +2277,11 @@ function fireConfetti(emoji) {
   if (_cfFrame) cancelAnimationFrame(_cfFrame);
   const EMOJI_FONT = "Apple Color Emoji,Segoe UI Emoji,Noto Color Emoji,serif";
   function tick() {
-    ctx.clearRect(0, 0, cvs.width, cvs.height);
+    ctx.clearRect(0, 0, W, H);
     let any = false;
     for (const p of parts) {
       p.x += p.vx; p.y += p.vy; p.vy += 0.12; p.rot += p.rv;
-      if (p.y > cvs.height * 0.72) p.a -= 0.022;
+      if (p.y > H * 0.72) p.a -= 0.022;
       if (p.a > 0) { any = true;
         ctx.save(); ctx.globalAlpha = p.a;
         ctx.translate(p.x, p.y); ctx.rotate(p.rot);
@@ -2286,7 +2290,7 @@ function fireConfetti(emoji) {
         ctx.fillText(emoji, 0, 0); ctx.restore(); }
     }
     if (any) _cfFrame = requestAnimationFrame(tick);
-    else ctx.clearRect(0, 0, cvs.width, cvs.height);
+    else ctx.clearRect(0, 0, W, H);
   }
   tick();
 }
