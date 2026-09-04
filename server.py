@@ -1166,8 +1166,8 @@ async def settings_list_passkeys(request: Request):
     try:
         async with _hx.AsyncClient(timeout=10) as c:
             r = await c.post(
-                f"{ZITADEL_ISSUER}/v2/users/{user_id}/passkeys/search",
-                json={},
+                f"{ZITADEL_ISSUER}/zitadel.user.v2.UserService/ListPasskeys",
+                json={"userId": user_id},
                 headers={"Authorization": f"Bearer {ZITADEL_SERVICE_TOKEN}"},
             )
         if r.status_code not in (200, 201):
@@ -1175,8 +1175,9 @@ async def settings_list_passkeys(request: Request):
             return JSONResponse({"passkeys": []})
         data = r.json()
         passkeys = [
-            {"id": pk.get("id"), "name": pk.get("name"), "changeDate": pk.get("details", {}).get("changeDate")}
+            {"id": pk.get("id"), "name": pk.get("name") or "Passkey"}
             for pk in data.get("result", [])
+            if pk.get("state") != "AUTH_FACTOR_STATE_NOT_READY"
         ]
         return JSONResponse({"passkeys": passkeys})
     except Exception as e:
