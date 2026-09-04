@@ -3,7 +3,7 @@ import os
 import json
 import logging
 from pathlib import Path
-from fastapi import FastAPI, HTTPException, Form, Request
+from fastapi import FastAPI, HTTPException, Form, Request, File, UploadFile
 from fastapi.responses import HTMLResponse, RedirectResponse, JSONResponse, Response
 from pydantic import BaseModel
 from psnawp_api import PSNAWP
@@ -631,6 +631,11 @@ ZITADEL_ISSUER        = os.environ.get("ZITADEL_ISSUER", "https://auth.crcmz.me"
 ZITADEL_CLIENT_ID     = os.environ.get("ZITADEL_CLIENT_ID", "")
 ZITADEL_SERVICE_TOKEN = os.environ.get("ZITADEL_SERVICE_TOKEN", "")
 SESSION_SECRET        = os.environ.get("SESSION_SECRET", "")
+
+# WhatsApp import authorization — BOTH conditions must hold
+WHATSAPP_IMPORT_ALLOWED_ROLE     = os.environ.get("WHATSAPP_IMPORT_ALLOWED_ROLE", "IAM Owner Viewer")
+WHATSAPP_IMPORT_ALLOWED_ZITADEL_SUB = os.environ.get("WHATSAPP_IMPORT_ALLOWED_ZITADEL_SUB", "")
+WA_INGEST_SECRET                 = os.environ.get("WA_INGEST_SECRET", "")
 
 _SESSION_COOKIE    = "psn_session"
 _OIDC_STATE_COOKIE = "psn_oidc_state"
@@ -1378,6 +1383,185 @@ async def _is_iam_admin(user_id: str) -> bool:
     return result
 
 
+_import_auth_cache: dict[str, tuple[bool, float]] = {}
+
+
+async def _is_whatsapp_importer(session: dict) -> bool:
+    """True iff session sub matches configured Moiz sub AND has the required Zitadel role.
+
+    Both conditions must hold. Result cached for 5 minutes.
+    """
+    sub = session.get("sub", "")
+    allowed_sub = WHATSAPP_IMPORT_ALLOWED_ZITADEL_SUB
+    if not sub or not allowed_sub or sub != allowed_sub:
+        return False
+    if not WHATSAPP_IMPORT_ALLOWED_ROLE or not ZITADEL_SERVICE_TOKEN:
+        return False
+    import time as _t
+    now = _t.time()
+    cached = _import_auth_cache.get(sub)
+    if cached and cached[1] > now:
+        return cached[0]
+
+    def _norm(r: str) -> str:
+        return r.strip().upper().replace(" ", "_").replace("-", "_")
+
+    allowed_norm = _norm(WHATSAPP_IMPORT_ALLOWED_ROLE)
+    result = False
+    import httpx as _hx
+    try:
+        async with _hx.AsyncClient(timeout=8) as c:
+            r = await c.post(
+                f"{ZITADEL_ISSUER}/admin/v1/members/_search",
+                json={"queries": [{"userIdQuery": {"userId": sub}}]},
+                headers={"Authorization": f"Bearer {ZITADEL_SERVICE_TOKEN}"},
+            )
+        if r.status_code == 200:
+            for member in r.json().get("result", []):
+                for role in member.get("roles", []):
+                    if _norm(role) == allowed_norm:
+                        result = True
+                        break
+    except Exception as exc:
+        logger.warning("whatsapp importer check failed for %s: %s", sub, exc)
+    _import_auth_cache[sub] = (result, now + 300)
+    return result
+
+
+# ── WhatsApp Analytics API ─────────────────────────────────────────────────────
+
+def _wa_params(request: Request) -> tuple[str, str, str]:
+    """Extract (range, start, end) query params."""
+    q = request.query_params
+    return q.get("range", "all_time"), q.get("start", ""), q.get("end", "")
+
+
+@app.get("/api/whatsapp/stats")
+def wa_stats(request: Request):
+    rng, s, e = _wa_params(request)
+    return JSONResponse(_wa.stats(rng, s, e))
+
+
+@app.get("/api/whatsapp/activity")
+def wa_activity(request: Request):
+    rng, s, e = _wa_params(request)
+    return JSONResponse(_wa.activity(rng, s, e))
+
+
+@app.get("/api/whatsapp/heatmap")
+def wa_heatmap(request: Request):
+    rng, s, e = _wa_params(request)
+    return JSONResponse(_wa.heatmap(rng, s, e))
+
+
+@app.get("/api/whatsapp/words")
+def wa_words(request: Request):
+    rng, s, e = _wa_params(request)
+    return JSONResponse(_wa.words(rng, s, e))
+
+
+@app.get("/api/whatsapp/emojis")
+def wa_emojis(request: Request):
+    rng, s, e = _wa_params(request)
+    return JSONResponse(_wa.emojis(rng, s, e))
+
+
+@app.get("/api/whatsapp/response-times")
+def wa_response_times(request: Request):
+    rng, s, e = _wa_params(request)
+    return JSONResponse(_wa.response_times(rng, s, e))
+
+
+@app.get("/api/whatsapp/members")
+def wa_members(request: Request):
+    rng, s, e = _wa_params(request)
+    return JSONResponse(_wa.members(rng, s, e))
+
+
+@app.get("/api/whatsapp/awards")
+def wa_awards(request: Request):
+    rng, s, e = _wa_params(request)
+    return JSONResponse(_wa.awards(rng, s, e))
+
+
+@app.get("/api/whatsapp/can-import")
+async def wa_can_import(request: Request):
+    session = _get_session(request)
+    if not session:
+        return JSONResponse({"can_import": False})
+    return JSONResponse({"can_import": await _is_whatsapp_importer(session)})
+
+
+@app.get("/api/whatsapp/export")
+async def wa_export(request: Request):
+    session = _get_session(request)
+    if not session:
+        raise HTTPException(status_code=401, detail="authentication required")
+    rng, s, e = _wa_params(request)
+    try:
+        data = await asyncio.to_thread(_wa.export_xlsx, rng, s, e)
+    except RuntimeError as exc:
+        raise HTTPException(status_code=501, detail=str(exc))
+    return Response(
+        content=data,
+        media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        headers={"Content-Disposition": f'attachment; filename="whatsapp_analytics_{rng}.xlsx"'},
+    )
+
+
+@app.post("/api/whatsapp/import")
+async def wa_import(
+    request: Request,
+    file: UploadFile = File(...),
+    group_jid: str = Form(default=""),
+):
+    """Import a WhatsApp export. Moiz-only (Zitadel sub + role check)."""
+    session = _get_session(request)
+    if not session:
+        raise HTTPException(status_code=401, detail="authentication required")
+    if not await _is_whatsapp_importer(session):
+        raise HTTPException(status_code=403, detail="not authorized to import WhatsApp history")
+
+    fname = file.filename or "export.txt"
+    ext = fname.rsplit(".", 1)[-1].lower()
+    if ext not in ("txt", "zip"):
+        raise HTTPException(status_code=400, detail="only .txt and .zip exports supported")
+
+    content = await file.read()
+    if len(content) > _wa.MAX_UPLOAD_BYTES:
+        raise HTTPException(status_code=413, detail="file too large (max 50 MB)")
+
+    try:
+        result = await asyncio.to_thread(
+            _wa.import_messages, content, fname,
+            group_jid or WA_GOOPERS_JID or "",
+            session["sub"],
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+    return JSONResponse(result)
+
+
+@app.post("/api/whatsapp/ingest")
+async def wa_ingest(request: Request):
+    """Receive a single live message from the Baileys bridge (internal use)."""
+    secret = request.headers.get("x-ingest-secret", "")
+    if WA_INGEST_SECRET and secret != WA_INGEST_SECRET:
+        raise HTTPException(status_code=403, detail="invalid ingest secret")
+    body = await request.json()
+    # Support batch or single message
+    msgs = body if isinstance(body, list) else [body]
+    inserted = 0
+    for msg in msgs:
+        if msg.get("type") == "reaction":
+            if await asyncio.to_thread(_wa.ingest_baileys_reaction, msg):
+                inserted += 1
+        else:
+            if await asyncio.to_thread(_wa.ingest_baileys_message, msg):
+                inserted += 1
+    return JSONResponse({"inserted": inserted, "received": len(msgs)})
+
+
 @app.get("/auth/settings/psn")
 async def settings_psn_status(request: Request):
     """PSN status for the logged-in user. Admins see all accounts."""
@@ -1576,6 +1760,9 @@ import clips as _clips
 import clip_store as _cstore
 from psn_messaging import ClipNotReady, ClipUnauthorized, ClipRateLimited, ClipError, ClipDownload
 _clips.init()
+
+import whatsapp_analytics as _wa
+_wa.init()
 
 _video_seen: set[str] = set()
 _video_initialized: bool = False
@@ -2861,6 +3048,39 @@ _DASHBOARD_TMPL = r"""<!doctype html>
     flex:none; white-space:nowrap; }
   .cage { color:var(--dim); font-size:11px; flex:none; margin-left:auto; }
 
+  /* ── WhatsApp tab ── */
+  .wa-range { display:flex; gap:5px; flex-wrap:wrap; margin-bottom:10px; }
+  .wa-rb { padding:5px 11px; border-radius:20px; border:1px solid rgba(255,255,255,.15);
+    background:none; color:var(--dim); font-size:11px; cursor:pointer;
+    font-family:"Rajdhani",sans-serif; font-weight:700; letter-spacing:.3px;
+    transition:background .12s, color .12s, border-color .12s; }
+  .wa-rb.on { background:linear-gradient(135deg,rgba(34,230,255,.18),rgba(157,92,255,.12));
+    border-color:var(--cyan); color:var(--cyan); }
+  .wa-date-in { background:rgba(255,255,255,.06); border:1px solid rgba(255,255,255,.15);
+    border-radius:9px; padding:7px 10px; color:var(--txt); font-size:13px;
+    outline:none; font-family:"Rajdhani",sans-serif; }
+  .wa-date-in:focus { border-color:var(--cyan); }
+  .wa-top { margin-bottom:6px; }
+  .wa-award-grid { display:grid; grid-template-columns:repeat(auto-fill,minmax(155px,1fr)); gap:8px; margin-bottom:14px; }
+  .wa-award { background:var(--card); border:1px solid var(--line); border-radius:14px;
+    padding:12px 10px; text-align:center; }
+  .wa-award .aw-em { font-size:24px; margin-bottom:5px; }
+  .wa-award .aw-role { font-size:9px; color:var(--dim); text-transform:uppercase;
+    letter-spacing:.8px; margin-bottom:3px; }
+  .wa-award .aw-name { font-size:14px; font-weight:700; color:var(--txt); }
+  .wa-award .aw-stat { font-size:10px; color:var(--dim); margin-top:2px; }
+  .wa-cloud { display:flex; flex-wrap:wrap; gap:6px; padding:12px 16px; }
+  .wa-cloud span { border-radius:6px; padding:2px 8px; background:rgba(157,92,255,.12);
+    border:1px solid rgba(157,92,255,.2); cursor:default; }
+  .wa-bar-row { display:flex; align-items:center; gap:8px; padding:6px 0;
+    border-bottom:1px solid rgba(255,255,255,.04); }
+  .wa-bar-row:last-child { border-bottom:none; }
+  .wa-bar-name { width:80px; font-size:12px; overflow:hidden; text-overflow:ellipsis;
+    white-space:nowrap; flex-shrink:0; }
+  .wa-bar-track { flex:1; height:6px; background:rgba(255,255,255,.06); border-radius:3px; overflow:hidden; }
+  .wa-bar-fill { height:100%; border-radius:3px; background:linear-gradient(90deg,var(--cyan),var(--neon)); }
+  .wa-bar-val { font-size:11px; color:var(--dim); flex-shrink:0; min-width:36px; text-align:right; }
+
   .user-btn { width:38px; height:38px; border-radius:50%;
     border:1.5px solid rgba(255,47,214,.7);
     background:linear-gradient(135deg,rgba(255,47,214,.25),rgba(157,92,255,.25));
@@ -3072,7 +3292,8 @@ _DASHBOARD_TMPL = r"""<!doctype html>
     <button class="tab on" data-p="squad" onclick="tab(this)"><span class="tab-icon">🎮</span><span class="tab-txt">Squad</span></button>
     <button class="tab" data-p="lb" onclick="tab(this)"><span class="tab-icon">🏆</span><span class="tab-txt">Ranks</span></button>
     <button class="tab" data-p="pipeline" onclick="tab(this)"><span class="tab-icon">🎬</span><span class="tab-txt">Clips</span></button>
-    <button class="tab" data-p="slap" onclick="tab(this);loadSlap()"><span class="tab-icon">🎵</span><span class="tab-txt">Slapshare</span></button>
+    <button class="tab" data-p="slap" onclick="tab(this);loadSlap()"><span class="tab-icon">🎵</span><span class="tab-txt">slap</span></button>
+    <button class="tab" data-p="wa" onclick="tab(this);loadWa()"><span class="tab-icon">💬</span><span class="tab-txt">WhatsApp</span></button>
   </div>
   <div class="panel on" id="p-squad">
     <div id="together"></div>
@@ -3096,6 +3317,36 @@ _DASHBOARD_TMPL = r"""<!doctype html>
     <div id="slap-vibe" class="card" style="display:none;margin-bottom:10px;padding:12px 16px;font-size:13px;color:var(--dim);font-style:italic;text-align:center"></div>
     <div id="slap-digest" class="card" style="display:none;margin-bottom:10px;padding:10px 14px;font-size:13px;color:var(--dim)"></div>
     <div id="slap-inner"><div class="spin">Loading Slapshare…</div></div>
+  </div>
+  <div class="panel" id="p-wa">
+    <div class="wa-top">
+      <div class="pip-title" style="margin:8px 0 4px">Professional Goopers</div>
+      <div class="wa-range" id="waRange">
+        <button class="wa-rb on" data-r="all_time" onclick="waSetRange(this)">All Time</button>
+        <button class="wa-rb" data-r="this_year" onclick="waSetRange(this)">This Year</button>
+        <button class="wa-rb" data-r="this_month" onclick="waSetRange(this)">This Month</button>
+        <button class="wa-rb" data-r="prev_month" onclick="waSetRange(this)">Prev Month</button>
+        <button class="wa-rb" data-r="custom" onclick="waSetRange(this)">Custom</button>
+      </div>
+      <div id="waCustomRange" style="display:none;display:flex;gap:8px;margin-top:8px;flex-wrap:wrap">
+        <input type="date" id="waStart" class="wa-date-in" onchange="waReload()">
+        <span style="color:var(--dim);line-height:38px">→</span>
+        <input type="date" id="waEnd" class="wa-date-in" onchange="waReload()">
+      </div>
+    </div>
+    <div id="wa-stats" class="statgrid" style="margin-bottom:10px"></div>
+    <div id="wa-inner"><div class="spin">Loading WhatsApp analytics…</div></div>
+    <div id="wa-import-section" style="display:none;margin-top:18px">
+      <div style="border-top:1px solid var(--line);padding-top:14px">
+        <p class="pip-title">Import WhatsApp History</p>
+        <div class="card" style="padding:14px 16px">
+          <p style="font-size:12.5px;color:var(--dim);margin:0 0 12px">Upload a WhatsApp export (.txt or .zip) to import historical messages.</p>
+          <input type="file" id="waImportFile" accept=".txt,.zip" style="display:none" onchange="waDoImport()">
+          <button class="smodal-btn" style="margin-top:0" onclick="document.getElementById('waImportFile').click()">📂 Choose Export File</button>
+          <div id="waImportMsg" class="smsg" style="display:none;margin-top:8px"></div>
+        </div>
+      </div>
+    </div>
   </div>
 </div>
 
@@ -4237,6 +4488,386 @@ async function changePassword(){
   const d = await r.json();
   if(r.ok){ _pwMsg('Password updated!','ok'); $('pwCur').value=''; $('pwNew').value=''; $('pwConf').value=''; }
   else { _pwMsg(d.error||'Failed to update password.','err'); }
+}
+
+// ── WhatsApp Analytics ────────────────────────────────────────────────────────
+let _waLoaded = false;
+let _waRange = 'all_time';
+let _waStart = '', _waEnd = '';
+
+function waSetRange(btn){
+  document.querySelectorAll('.wa-rb').forEach(b=>b.classList.remove('on'));
+  btn.classList.add('on');
+  _waRange = btn.dataset.r;
+  const custom = $('waCustomRange');
+  if(custom) custom.style.display = _waRange==='custom' ? 'flex' : 'none';
+  if(_waRange !== 'custom') waReload();
+}
+function waReload(){
+  if(_waRange==='custom'){
+    _waStart = ($('waStart')||{}).value||'';
+    _waEnd   = ($('waEnd')||{}).value||'';
+    if(!_waStart||!_waEnd) return;
+  }
+  _waLoaded = false;
+  if($('wa-inner')) $('wa-inner').innerHTML = '<div class="spin">Loading…</div>';
+  if($('wa-stats')) $('wa-stats').innerHTML = '';
+  loadWa();
+}
+
+function _waQs(){
+  let qs = '?range='+_waRange;
+  if(_waRange==='custom') qs += '&start='+_waStart+'&end='+_waEnd;
+  return qs;
+}
+
+async function loadWa(){
+  if(_waLoaded) return;
+  _waLoaded = true;
+  try {
+    const qs = _waQs();
+    const [sR,aR,hmR,wdR,emR,rtR,mbR,awR,ciR] = await Promise.all([
+      fetch('/api/whatsapp/stats'+qs).then(r=>r.json()),
+      fetch('/api/whatsapp/activity'+qs).then(r=>r.json()),
+      fetch('/api/whatsapp/heatmap'+qs).then(r=>r.json()),
+      fetch('/api/whatsapp/words'+qs).then(r=>r.json()),
+      fetch('/api/whatsapp/emojis'+qs).then(r=>r.json()),
+      fetch('/api/whatsapp/response-times'+qs).then(r=>r.json()),
+      fetch('/api/whatsapp/members'+qs).then(r=>r.json()),
+      fetch('/api/whatsapp/awards'+qs).then(r=>r.json()),
+      fetch('/api/whatsapp/can-import').then(r=>r.json()),
+    ]);
+
+    // Stat tiles
+    const fmtN = n => n>=1000 ? (n/1000).toFixed(1)+'k' : String(n||0);
+    $('wa-stats').innerHTML =
+      `<div class="stile"><div class="sv">${fmtN(sR.total_messages)}</div><div class="sl">💬 Messages</div></div>`+
+      `<div class="stile"><div class="sv">${sR.total_members||0}</div><div class="sl">👥 Members</div></div>`+
+      `<div class="stile"><div class="sv">${fmtN(sR.total_videos)}</div><div class="sl">🎬 Videos</div></div>`+
+      `<div class="stile"><div class="sv">${fmtN(sR.total_photos)}</div><div class="sl">📷 Photos</div></div>`+
+      `<div class="stile"><div class="sv">${sR.conversation_days||0}</div><div class="sl">📅 Days</div></div>`+
+      `<div class="stile"><div class="sv" style="font-size:14px">${sR.total_members>0?fmtN(Math.round((sR.total_messages||0)/(sR.total_members||1))):'—'}</div><div class="sl">📊 Msgs/Person</div></div>`;
+
+    if(ciR.can_import) $('wa-import-section').style.display='block';
+
+    let html = '';
+
+    // Empty state
+    if(!sR.total_messages){
+      html = `<div class="card"><div class="empty">No WhatsApp messages yet.<br>`;
+      if(ciR.can_import) html += `Use the import button below to load your chat history.`;
+      else html += `Ask Moiz to import the chat history.`;
+      html += `</div></div>`;
+      $('wa-inner').innerHTML = html;
+      return;
+    }
+
+    // ── Awards ───────────────────────────────────────────────────────────────
+    const aw = awR;
+    const awards = [
+      {em:'🏆',role:'Certified Yapper',  name: aw.certified_yapper?.name,  stat: aw.certified_yapper?.count+' msgs'},
+      {em:'🌙',role:'Night Owl',          name: aw.night_owl?.name,          stat: aw.night_owl?.count+' late msgs'},
+      {em:'🌅',role:'Early Bird',         name: aw.early_bird?.name,         stat: aw.early_bird?.count+' morning msgs'},
+      {em:'🎬',role:'Video King',         name: aw.video_king?.name,         stat: aw.video_king?.count+' videos'},
+      {em:'📷',role:'Photo King',         name: aw.photo_king?.name,         stat: aw.photo_king?.count+' photos'},
+      {em:'💀',role:'Most 💀',            name: aw.most_skull?.name,         stat: aw.most_skull?.count+' skulls'},
+      {em:'😂',role:'Most 😂',            name: aw.most_laugh?.name,         stat: aw.most_laugh?.count+' laughs'},
+      {em:'🔥',role:'Most 🔥',            name: aw.most_fire?.name,          stat: aw.most_fire?.count+' fires'},
+      {em:'⚡',role:'Fastest Replier',    name: aw.fastest_replier?.name,    stat: aw.fastest_replier?.avg_minutes ? aw.fastest_replier.avg_minutes+'m avg' : null},
+      {em:'👻',role:'Ghost of Month',     name: aw.ghost_of_month?.name,     stat: aw.ghost_of_month?.count+' msgs'},
+    ].filter(a=>a.name);
+
+    if(awards.length){
+      const cards = awards.map(a=>`<div class="wa-award">
+        <div class="aw-em">${a.em}</div>
+        <div class="aw-role">${esc(a.role)}</div>
+        <div class="aw-name">${esc(a.name||'—')}</div>
+        ${a.stat?`<div class="aw-stat">${esc(String(a.stat))}</div>`:''}
+      </div>`).join('');
+      html += `<div class="pip-section">
+  <p class="pip-title">🏅 Awards</p>
+  <div class="wa-award-grid">${cards}</div>
+</div>`;
+    }
+
+    // Fun facts row
+    const facts = [];
+    if(aw.most_used_emoji) facts.push(`Most used emoji: ${aw.most_used_emoji.emoji} (${aw.most_used_emoji.count}×)`);
+    if(aw.peak_hour!=null) facts.push(`Peak hour: ${aw.peak_hour.hour}:00 (${aw.peak_hour.count} msgs)`);
+    if(aw.biggest_day)    facts.push(`Biggest day: ${aw.biggest_day.date} — ${aw.biggest_day.count} msgs`);
+    if(aw.longest_streak_days>1) facts.push(`Longest streak: ${aw.longest_streak_days} days`);
+    if(facts.length){
+      html += `<div class="pip-section">
+  <div class="card" style="padding:10px 16px">
+    <div style="display:flex;flex-wrap:wrap;gap:8px">
+    ${facts.map(f=>`<span style="font-size:12px;padding:4px 10px;border-radius:20px;background:rgba(34,230,255,.08);border:1px solid rgba(34,230,255,.2);color:var(--cyan)">${esc(f)}</span>`).join('')}
+    </div>
+  </div>
+</div>`;
+    }
+
+    // ── Activity Timeline (bar chart) ────────────────────────────────────────
+    const daily = (aR.daily||[]).slice(-60);
+    if(daily.length>1){
+      const dMax = Math.max(...daily.map(d=>d.count),1);
+      const bars = daily.map(d=>{
+        const h = Math.max(2, Math.round((d.count/dMax)*60));
+        return `<div title="${esc(d.date)}: ${d.count}" style="display:flex;flex-direction:column;align-items:center;gap:2px">
+          <div style="width:7px;background:linear-gradient(to top,var(--cyan),var(--neon));border-radius:2px 2px 0 0;height:${h}px;opacity:.8"></div>
+        </div>`;
+      }).join('');
+      const labels = daily.filter((_,i)=>i%10===0).map(d=>`<span style="font-size:8px;color:var(--dim)">${d.date.slice(5)}</span>`).join('');
+      html += `<div class="pip-section">
+  <p class="pip-title">📈 Activity Timeline <span style="font-size:10px;color:var(--dim)">last 60 days</span></p>
+  <div class="card" style="padding:12px 16px;overflow-x:auto">
+    <div style="display:flex;align-items:flex-end;gap:2px;min-height:80px">${bars}</div>
+  </div>
+</div>`;
+    }
+
+    // ── Monthly timeline ─────────────────────────────────────────────────────
+    const monthly = aR.monthly||[];
+    if(monthly.length>1){
+      const mMax = Math.max(...monthly.map(m=>m.count),1);
+      const mBars = monthly.map(m=>{
+        const h = Math.max(2, Math.round((m.count/mMax)*60));
+        return `<div title="${esc(m.month)}: ${m.count}" style="display:flex;flex-direction:column;align-items:center;gap:3px;flex:1;min-width:0">
+          <div style="width:100%;background:linear-gradient(to top,var(--violet),var(--neon));border-radius:3px 3px 0 0;height:${h}px;opacity:.85"></div>
+          <div style="font-size:8px;color:var(--dim);writing-mode:vertical-rl;transform:rotate(180deg);max-height:28px;overflow:hidden">${esc(m.month.slice(2))}</div>
+        </div>`;
+      }).join('');
+      html += `<div class="pip-section">
+  <p class="pip-title">📅 Monthly Activity</p>
+  <div class="card" style="padding:12px 16px">
+    <div style="display:flex;align-items:flex-end;gap:3px;min-height:80px">${mBars}</div>
+  </div>
+</div>`;
+    }
+
+    // ── Activity by Hour ─────────────────────────────────────────────────────
+    const byHour = aR.by_hour||[];
+    if(byHour.length){
+      const hMax = Math.max(...byHour.map(h=>h.count),1);
+      const hBars = byHour.map(h=>{
+        const ht = Math.max(1, Math.round((h.count/hMax)*48));
+        return `<div title="${h.hour}:00 — ${h.count}" style="display:flex;flex-direction:column;align-items:center;gap:2px;flex:1">
+          <div style="width:100%;background:linear-gradient(to top,var(--cyan),rgba(34,230,255,.4));border-radius:2px 2px 0 0;height:${ht}px"></div>
+          <div style="font-size:7px;color:var(--dim)">${h.hour}</div>
+        </div>`;
+      }).join('');
+      html += `<div class="pip-section">
+  <p class="pip-title">⏰ Activity by Hour</p>
+  <div class="card" style="padding:12px 16px">
+    <div style="display:flex;align-items:flex-end;gap:2px;min-height:66px">${hBars}</div>
+  </div>
+</div>`;
+    }
+
+    // ── Day of Week ──────────────────────────────────────────────────────────
+    const byDow = aR.by_dow||[];
+    if(byDow.length){
+      const dMax2 = Math.max(...byDow.map(d=>d.count),1);
+      const dowBars = byDow.map(d=>{
+        const w2 = Math.round((d.count/dMax2)*100);
+        return `<div class="wa-bar-row">
+          <div class="wa-bar-name">${esc(d.label)}</div>
+          <div class="wa-bar-track"><div class="wa-bar-fill" style="width:${w2}%"></div></div>
+          <div class="wa-bar-val">${d.count}</div>
+        </div>`;
+      }).join('');
+      html += `<div class="pip-section">
+  <p class="pip-title">📆 Activity by Day of Week</p>
+  <div class="card" style="padding:8px 16px">${dowBars}</div>
+</div>`;
+    }
+
+    // ── Activity Heatmap ─────────────────────────────────────────────────────
+    {
+      const cells = hmR.cells||[];
+      const hMax2 = hmR.max_count||1;
+      const lookup = {};
+      cells.forEach(c=>{ lookup[c.dow+'-'+c.hour]=c.count; });
+      const days7 = ['Mon','Tue','Wed','Thu','Fri','Sat','Sun'];
+      const hmRows = days7.map((d,di)=>{
+        const cols = Array.from({length:24},(_,h)=>{
+          const cnt = lookup[di+'-'+h]||0;
+          const bg = cnt ? `rgba(157,92,255,${(0.15+Math.min(cnt/hMax2,1)*0.75).toFixed(2)})` : 'rgba(255,255,255,.04)';
+          return `<div title="${d} ${h}:00 — ${cnt} msgs" style="width:13px;height:13px;border-radius:2px;background:${bg};flex-shrink:0"></div>`;
+        }).join('');
+        return `<div style="display:flex;align-items:center;gap:3px;margin-bottom:3px"><div style="width:26px;font-size:9px;color:var(--dim);text-align:right;flex-shrink:0">${d}</div>${cols}</div>`;
+      }).join('');
+      const hmLbls = Array.from({length:8},(_,i)=>`<div style="flex:1;font-size:8px;color:var(--dim);text-align:center">${i*3}h</div>`).join('');
+      html += `<div class="pip-section">
+  <p class="pip-title">🌡️ Activity Heatmap <span style="font-size:10px;color:var(--dim)">day × hour</span></p>
+  <div class="card" style="padding:12px 16px;overflow-x:auto">
+    <div style="min-width:380px">
+      <div style="display:flex;margin-left:29px;margin-bottom:4px">${hmLbls}</div>
+      ${hmRows}
+    </div>
+  </div>
+</div>`;
+    }
+
+    // ── Member Activity ──────────────────────────────────────────────────────
+    const mbs = mbR.members||[];
+    if(mbs.length){
+      const mMax2 = mbs[0]?.messages||1;
+      const mRows = mbs.map((m,i)=>{
+        const pct = Math.round((m.messages/mMax2)*100);
+        const medal = i===0?'🥇':i===1?'🥈':i===2?'🥉':'';
+        return `<div style="display:flex;align-items:center;gap:10px;padding:9px 4px;border-bottom:1px solid rgba(255,255,255,.04)">
+          <div style="font-size:14px;width:24px;text-align:center;flex-shrink:0">${medal||String(i+1)}</div>
+          <div style="flex:1;min-width:0">
+            <div style="font-size:13.5px;font-weight:700;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${esc(m.name)}</div>
+            <div style="height:4px;background:rgba(255,255,255,.06);border-radius:2px;margin-top:4px;overflow:hidden">
+              <div style="height:100%;width:${pct}%;background:linear-gradient(90deg,var(--cyan),var(--neon));border-radius:2px"></div>
+            </div>
+            <div style="font-size:10px;color:var(--dim);margin-top:2px">${m.total_words} words · ${m.avg_words_per_msg} avg/msg</div>
+          </div>
+          <div style="text-align:right;flex-shrink:0">
+            <div style="font-family:'Orbitron',sans-serif;font-size:13px;color:var(--cyan)">${m.messages}</div>
+            <div style="font-size:9px;color:var(--dim)">msgs</div>
+          </div>
+        </div>`;
+      }).join('');
+      html += `<div class="pip-section">
+  <p class="pip-title">👥 Member Activity</p>
+  <div class="card" style="padding:4px 12px">${mRows}</div>
+</div>`;
+    }
+
+    // ── Emoji Analysis ───────────────────────────────────────────────────────
+    const topEm = emR.top_emoji||[];
+    if(topEm.length){
+      const emCards = topEm.slice(0,12).map(e=>`<div style="text-align:center;padding:10px 6px;background:rgba(255,255,255,.03);border:1px solid rgba(255,255,255,.07);border-radius:10px">
+        <div style="font-size:26px">${e.emoji}</div>
+        <div style="font-family:'Orbitron',sans-serif;font-size:11px;color:var(--gold);margin-top:4px">${e.count}</div>
+        <div style="font-size:9px;color:var(--dim)">${e.pct}%</div>
+      </div>`).join('');
+      html += `<div class="pip-section">
+  <p class="pip-title">😂 Top Emoji <span style="font-size:10px;color:var(--dim)">${emR.total_emoji||0} total</span></p>
+  <div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(64px,1fr));gap:7px;margin-bottom:10px">${emCards}</div>`;
+
+      // Emoji by member
+      const memberEmKeys = Object.keys(emR.member_top_emoji||{});
+      if(memberEmKeys.length){
+        const memEm = memberEmKeys.map(name=>{
+          const tops = (emR.member_top_emoji[name]||[]).slice(0,5).map(e=>`<span title="${e.count}" style="font-size:18px">${e.emoji}</span>`).join(' ');
+          return `<div style="display:flex;align-items:center;gap:8px;padding:5px 0;border-bottom:1px solid rgba(255,255,255,.04)">
+            <div style="font-size:12px;font-weight:600;flex-shrink:0;width:80px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${esc(name)}</div>
+            <div>${tops}</div>
+          </div>`;
+        }).join('');
+        html += `<div class="card" style="padding:8px 12px;margin-top:8px">${memEm}</div>`;
+      }
+      html += `</div>`;
+    }
+
+    // ── Word Analysis ────────────────────────────────────────────────────────
+    const topWords = wdR.top_words||[];
+    if(topWords.length){
+      const wMax = topWords[0]?.count||1;
+      const wRows = topWords.slice(0,20).map((w,i)=>{
+        const pct = Math.round((w.count/wMax)*100);
+        return `<div class="wa-bar-row">
+          <div class="wa-bar-name" style="width:90px;font-size:12px">${esc(w.word)}</div>
+          <div class="wa-bar-track"><div class="wa-bar-fill" style="width:${pct}%;background:linear-gradient(90deg,var(--violet),var(--cyan))"></div></div>
+          <div class="wa-bar-val">${w.count}</div>
+        </div>`;
+      }).join('');
+
+      // Word cloud
+      const cloudMax = topWords[0]?.count||1;
+      const cloud = topWords.slice(0,50).map(w=>{
+        const sz = Math.round(10 + (w.count/cloudMax)*16);
+        const op = (0.4 + (w.count/cloudMax)*0.6).toFixed(2);
+        const colors = ['var(--cyan)','var(--neon)','var(--violet)','var(--lime)','var(--gold)'];
+        const col = colors[w.word.charCodeAt(0)%colors.length];
+        return `<span style="font-size:${sz}px;opacity:${op};color:${col};cursor:default" title="${w.count}">${esc(w.word)}</span>`;
+      }).join(' ');
+
+      html += `<div class="pip-section">
+  <p class="pip-title">📝 Word Analysis</p>
+  <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-bottom:8px">
+    <div class="card" style="padding:8px 12px">${wRows}</div>
+    <div class="card" style="padding:12px 14px;line-height:1.9"><div class="wa-cloud">${cloud}</div></div>
+  </div>
+</div>`;
+    }
+
+    // ── Response Times ───────────────────────────────────────────────────────
+    const rtData = rtR.member_avg_minutes||[];
+    if(rtData.length){
+      const rtMax = rtData[rtData.length-1]?.avg_minutes||60;
+      const rtRows = rtData.map((r,i)=>{
+        const pct = Math.round((r.avg_minutes/Math.max(rtMax,1))*100);
+        return `<div class="wa-bar-row">
+          <div class="wa-bar-name" style="width:90px">${esc(r.name)}</div>
+          <div class="wa-bar-track"><div class="wa-bar-fill" style="width:${pct}%;background:linear-gradient(90deg,var(--lime),var(--cyan))"></div></div>
+          <div class="wa-bar-val">${r.avg_minutes}m</div>
+        </div>`;
+      }).join('');
+      const distData = rtR.distribution||[];
+      const distMax = Math.max(...distData.map(d=>d.count),1);
+      const distBars = distData.map(d=>{
+        const h = Math.max(2, Math.round((d.count/distMax)*50));
+        return `<div title="${esc(d.label)}: ${d.count}" style="display:flex;flex-direction:column;align-items:center;gap:3px;flex:1">
+          <div style="width:100%;background:linear-gradient(to top,var(--violet),var(--neon));border-radius:3px 3px 0 0;height:${h}px"></div>
+          <div style="font-size:9px;color:var(--dim);white-space:nowrap">${esc(d.label)}</div>
+        </div>`;
+      }).join('');
+      html += `<div class="pip-section">
+  <p class="pip-title">⚡ Response Times <span style="font-size:10px;color:var(--dim)">${rtR.event_count||0} exchanges</span></p>
+  <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px">
+    <div class="card" style="padding:8px 12px">${rtRows}</div>
+    <div class="card" style="padding:12px 16px">
+      <div style="display:flex;align-items:flex-end;gap:4px;min-height:60px">${distBars}</div>
+    </div>
+  </div>
+</div>`;
+    }
+
+    // ── Export button ────────────────────────────────────────────────────────
+    html += `<div class="pip-section">
+  <a href="/api/whatsapp/export${_waQs()}" download style="display:block;text-align:center;padding:11px;border-radius:12px;background:rgba(255,47,214,.1);border:1px solid rgba(255,47,214,.3);color:var(--neon);font-size:13.5px;font-weight:700;text-decoration:none">📊 Export as Excel</a>
+</div>`;
+
+    $('wa-inner').innerHTML = html;
+
+  } catch(err) {
+    if($('wa-inner')) $('wa-inner').innerHTML = '<div class="card"><div class="empty">Could not load WhatsApp analytics.</div></div>';
+  }
+}
+
+async function waDoImport(){
+  const fi = $('waImportFile');
+  if(!fi||!fi.files.length) return;
+  const file = fi.files[0];
+  const msg = $('waImportMsg');
+  const btn = fi.previousElementSibling;
+  if(msg){ msg.style.display='none'; }
+  if(btn){ btn.disabled=true; btn.textContent='Uploading…'; }
+  try {
+    const fd = new FormData();
+    fd.append('file', file);
+    const r = await fetch('/api/whatsapp/import', {method:'POST', body:fd});
+    const d = await r.json();
+    if(r.ok){
+      const s = d.status==='already_imported'
+        ? `Already imported (${d.message_count} messages on file).`
+        : `✓ Imported ${d.message_count} messages (${d.duplicate_count} dupes skipped).`;
+      if(msg){ msg.className='smsg ok'; msg.textContent=s; msg.style.display='block'; }
+      // Reload analytics
+      setTimeout(()=>{ _waLoaded=false; loadWa(); }, 800);
+    } else {
+      if(msg){ msg.className='smsg err'; msg.textContent=d.detail||'Import failed.'; msg.style.display='block'; }
+    }
+  } catch(e){
+    if(msg){ msg.className='smsg err'; msg.textContent='Network error.'; msg.style.display='block'; }
+  } finally {
+    if(btn){ btn.disabled=false; btn.textContent='📂 Choose Export File'; }
+    fi.value='';
+  }
 }
 </script>
 </body></html>"""
