@@ -661,7 +661,7 @@ def _login_page(error: str = "", next: str = "/") -> str:
 <html lang="en"><head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
-<title>Sign in · The Squad</title>
+<title>Sign in · Chat Board</title>
 <style>
   :root {{ color-scheme:dark; }}
   * {{ box-sizing:border-box; -webkit-tap-highlight-color:transparent; }}
@@ -731,7 +731,7 @@ def _login_page(error: str = "", next: str = "/") -> str:
 <body><div class="card">
   <div class="brand">
     <div class="logo">🎮</div>
-    <div><h1>The Squad</h1><p class="sub">Members only</p></div>
+    <div><h1>Chat Board</h1><p class="sub">Members only</p></div>
   </div>
   {err_html}
   <form method="post" action="/auth/login?next={safe_next}" id="f">
@@ -2316,7 +2316,7 @@ _DASHBOARD_TMPL = r"""<!doctype html>
 <html lang="en"><head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
-<title>The Squad · PSN</title>
+<title>Chat Board · PSN</title>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Orbitron:wght@600;800;900&family=Rajdhani:wght@500;600;700&display=swap" rel="stylesheet">
@@ -2716,7 +2716,7 @@ _DASHBOARD_TMPL = r"""<!doctype html>
 <div class="wrap">
   <div class="top">
     <div class="logo">🎮</div>
-    <div><h1>The Squad</h1><p class="tag">PSN · Live</p></div>
+    <div><h1>Chat Board</h1><p class="tag">PSN · Live</p></div>
     <div style="margin-left:auto;display:flex;align-items:center;gap:10px">
       <div class="live" id="livecount"></div>
       <div style="position:relative">__USER__</div>
