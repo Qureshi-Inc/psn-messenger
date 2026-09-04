@@ -1228,15 +1228,23 @@ async def settings_change_password(request: Request):
     try:
         async with _hx.AsyncClient(timeout=10) as c:
             r = await c.post(
-                f"{ZITADEL_ISSUER}/v2/users/{user_id}/password",
-                json={"currentPassword": current, "newPassword": new_pw},
-                headers={"Authorization": f"Bearer {ZITADEL_SERVICE_TOKEN}"},
+                f"{ZITADEL_ISSUER}/zitadel.user.v2.UserService/SetPassword",
+                json={
+                    "userId": user_id,
+                    "currentPassword": current,
+                    "newPassword": {"password": new_pw, "changeRequired": False},
+                },
+                headers={
+                    "Authorization": f"Bearer {ZITADEL_SERVICE_TOKEN}",
+                    "Connect-Protocol-Version": "1",
+                },
             )
         if r.status_code not in (200, 201):
             d = r.json()
             msg = d.get("message", "")
-            if "current password" in msg.lower() or r.status_code == 401:
-                return JSONResponse({"error": "Current password is incorrect."}, status_code=400)
+            if "invalid" in msg.lower() or "incorrect" in msg.lower() or r.status_code in (400, 401):
+                user_msg = "Current password is incorrect." if "invalid" in msg.lower() else msg or "Failed to update password."
+                return JSONResponse({"error": user_msg}, status_code=400)
             logger.warning("settings/password: %s %s", r.status_code, r.text[:200])
             return JSONResponse({"error": "Failed to update password."}, status_code=400)
         return JSONResponse({"ok": True})
