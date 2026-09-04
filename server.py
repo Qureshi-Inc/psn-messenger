@@ -568,9 +568,10 @@ import hashlib as _hashlib, base64 as _base64, secrets as _secrets
 from urllib.parse import urlencode as _urlencode
 from itsdangerous import URLSafeTimedSerializer as _USTS, BadSignature, SignatureExpired
 
-ZITADEL_ISSUER    = os.environ.get("ZITADEL_ISSUER", "https://auth.crcmz.me")
-ZITADEL_CLIENT_ID = os.environ.get("ZITADEL_CLIENT_ID", "")
-SESSION_SECRET    = os.environ.get("SESSION_SECRET", "")
+ZITADEL_ISSUER        = os.environ.get("ZITADEL_ISSUER", "https://auth.crcmz.me")
+ZITADEL_CLIENT_ID     = os.environ.get("ZITADEL_CLIENT_ID", "")
+ZITADEL_SERVICE_TOKEN = os.environ.get("ZITADEL_SERVICE_TOKEN", "")
+SESSION_SECRET        = os.environ.get("SESSION_SECRET", "")
 
 _SESSION_COOKIE    = "psn_session"
 _OIDC_STATE_COOKIE = "psn_oidc_state"
@@ -644,19 +645,108 @@ async def _auth_gate(request: Request, call_next):
     return JSONResponse({"detail": "authentication required"}, status_code=401)
 
 
+def _login_page(error: str = "", next: str = "/") -> str:
+    err_html = f'<div class="msg err">⚠️ {error}</div>' if error else ""
+    safe_next = next if next.startswith("/") else "/"
+    return f"""<!doctype html>
+<html lang="en"><head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Sign in · The Squad</title>
+<style>
+  :root {{ color-scheme:dark; }}
+  * {{ box-sizing:border-box; -webkit-tap-highlight-color:transparent; }}
+  html,body {{ margin:0; }}
+  body {{ font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif;
+    color:#f3ecff; min-height:100dvh; display:flex; align-items:center;
+    justify-content:center; padding:24px 16px; background:#05030f;
+    position:relative; overflow:hidden; }}
+  body::before {{ content:""; position:fixed; inset:-30% -10%; z-index:-1;
+    background:
+      radial-gradient(38% 40% at 18% 12%, rgba(255,47,214,.34), transparent 60%),
+      radial-gradient(40% 40% at 84% 18%, rgba(34,230,255,.30), transparent 60%),
+      radial-gradient(46% 42% at 55% 96%, rgba(157,92,255,.28), transparent 62%);
+    filter:blur(34px); animation:drift 22s ease-in-out infinite alternate; }}
+  @keyframes drift {{ to {{ transform:translate3d(4%,3%,0) scale(1.12); }} }}
+  .card {{ width:100%; max-width:400px; background:rgba(18,10,38,.76);
+    border:1px solid rgba(255,60,200,.24); border-radius:24px; padding:32px 28px 28px;
+    box-shadow:0 30px 80px rgba(0,0,0,.6), inset 0 1px 0 rgba(255,255,255,.06);
+    backdrop-filter:blur(22px); -webkit-backdrop-filter:blur(22px);
+    animation:rise .5s cubic-bezier(.2,.8,.2,1) both; }}
+  @keyframes rise {{ from {{ opacity:0; transform:translateY(18px) scale(.97); }} }}
+  .brand {{ display:flex; align-items:center; gap:13px; margin-bottom:26px; }}
+  .logo {{ width:50px; height:50px; border-radius:14px; flex:none; display:grid;
+    place-items:center; font-size:26px;
+    background:linear-gradient(135deg,#ff2fd6,#9d5cff);
+    box-shadow:0 0 22px rgba(255,47,214,.6), 0 0 44px rgba(157,92,255,.3);
+    border:1px solid rgba(255,255,255,.15); }}
+  h1 {{ font-size:22px; margin:0; font-weight:800; letter-spacing:.5px;
+    background:linear-gradient(90deg,#22e6ff,#ff2fd6);
+    -webkit-background-clip:text; background-clip:text; color:transparent; }}
+  .sub {{ color:#9d8fc4; font-size:12px; margin:3px 0 0; letter-spacing:1px;
+    text-transform:uppercase; }}
+  label {{ display:block; font-size:11.5px; color:#9d8fc4; margin:18px 0 7px;
+    font-weight:700; letter-spacing:.4px; text-transform:uppercase; }}
+  input {{ width:100%; padding:14px; border-radius:13px;
+    border:1px solid rgba(140,160,255,.22); background:rgba(6,4,18,.7);
+    color:#f3ecff; font-size:15px; -webkit-appearance:none; appearance:none;
+    transition:border .15s, box-shadow .15s; }}
+  input:focus {{ outline:none; border-color:#22e6ff;
+    box-shadow:0 0 0 3px rgba(34,230,255,.18); }}
+  .btn {{ display:flex; align-items:center; justify-content:center; width:100%;
+    margin-top:24px; padding:15px; border-radius:14px; border:none;
+    font-size:15.5px; font-weight:800; cursor:pointer; letter-spacing:.5px;
+    background:linear-gradient(135deg,#ff2fd6,#9d5cff); color:#fff;
+    box-shadow:0 10px 28px rgba(255,47,214,.45);
+    transition:filter .15s, transform .07s; }}
+  .btn:hover {{ filter:brightness(1.12); }}
+  .btn:active {{ transform:scale(.975); }}
+  .btn:disabled {{ opacity:.55; cursor:default; }}
+  .msg {{ padding:13px 15px; border-radius:13px; font-size:13.5px;
+    margin-bottom:6px; display:flex; gap:10px; align-items:center; line-height:1.45; }}
+  .err {{ background:rgba(255,107,139,.12); border:1px solid rgba(255,107,139,.4);
+    color:#ffc0cd; }}
+</style></head>
+<body><div class="card">
+  <div class="brand">
+    <div class="logo">🎮</div>
+    <div><h1>The Squad</h1><p class="sub">Members only</p></div>
+  </div>
+  {err_html}
+  <form method="post" action="/auth/login?next={safe_next}" id="f">
+    <label for="em">Email</label>
+    <input type="email" name="email" id="em" required autocomplete="email"
+      placeholder="you@example.com" inputmode="email">
+    <label for="pw">Password</label>
+    <input type="password" name="pw" id="pw" required autocomplete="current-password"
+      placeholder="Your password">
+    <button type="submit" class="btn" id="btn">Sign in →</button>
+  </form>
+</div>
+<script>
+  document.getElementById('f').addEventListener('submit', () => {{
+    const b = document.getElementById('btn');
+    b.disabled = true; b.textContent = 'Signing in…';
+  }});
+</script>
+</body></html>"""
+
+
 @app.get("/auth/login")
 async def auth_login(request: Request, next: str = "/"):
+    # Custom embedded form when service token is configured.
+    if ZITADEL_SERVICE_TOKEN:
+        return HTMLResponse(_login_page(next=next))
+    # Fallback: PKCE redirect to Zitadel Login V2.
     if not ZITADEL_CLIENT_ID:
         return HTMLResponse("<h1>ZITADEL_CLIENT_ID not configured</h1>", status_code=503)
     try:
         cfg = await _oidc_cfg()
     except Exception as e:
         return HTMLResponse(f"<h1>Auth service unavailable: {e}</h1>", status_code=503)
-
     verifier, challenge = _pkce()
     state = _secrets.token_urlsafe(16)
     signed_state = _state_signer().dumps({"state": state, "verifier": verifier, "next": next[:200]})
-
     params = _urlencode({
         "client_id": ZITADEL_CLIENT_ID,
         "redirect_uri": f"https://{_PUBLIC_HOST}/auth/callback",
@@ -669,6 +759,56 @@ async def auth_login(request: Request, next: str = "/"):
     resp = RedirectResponse(url=f"{cfg['authorization_endpoint']}?{params}", status_code=302)
     resp.set_cookie(_OIDC_STATE_COOKIE, signed_state, httponly=True, samesite="lax",
                     secure=True, max_age=600, path="/")
+    return resp
+
+
+@app.post("/auth/login")
+async def auth_login_submit(request: Request, next: str = "/"):
+    form = await request.form()
+    email    = (form.get("email") or "").strip()
+    password = (form.get("pw")    or "").strip()
+
+    if not email or not password:
+        return HTMLResponse(_login_page(error="Email and password are required.", next=next), status_code=400)
+    if not ZITADEL_SERVICE_TOKEN:
+        return HTMLResponse(_login_page(error="Auth service not configured.", next=next), status_code=503)
+
+    import httpx as _hx
+    try:
+        async with _hx.AsyncClient(timeout=15) as c:
+            r = await c.post(
+                f"{ZITADEL_ISSUER}/v2/sessions",
+                json={"checks": {
+                    "user":     {"loginName": email},
+                    "password": {"password": password},
+                }},
+                headers={"Authorization": f"Bearer {ZITADEL_SERVICE_TOKEN}"},
+            )
+        if r.status_code not in (200, 201):
+            logger.warning("auth: session create %s for %s", r.status_code, email)
+            return HTMLResponse(_login_page(error="Invalid email or password.", next=next), status_code=401)
+
+        session_id = r.json().get("sessionId", "")
+        async with _hx.AsyncClient(timeout=10) as c:
+            sr = await c.get(
+                f"{ZITADEL_ISSUER}/v2/sessions/{session_id}",
+                headers={"Authorization": f"Bearer {ZITADEL_SERVICE_TOKEN}"},
+            )
+        user_f = sr.json().get("session", {}).get("factors", {}).get("user", {})
+        sub        = user_f.get("id", "")
+        user_email = user_f.get("loginName", email)
+    except Exception as e:
+        logger.error("auth: login error: %s", e)
+        return HTMLResponse(_login_page(error="Auth service unavailable.", next=next), status_code=503)
+
+    if not sub:
+        return HTMLResponse(_login_page(error="Invalid email or password.", next=next), status_code=401)
+
+    safe_next = next if next.startswith("/") else "/"
+    session = {"sub": sub, "email": user_email}
+    resp = RedirectResponse(url=safe_next, status_code=302)
+    resp.set_cookie(_SESSION_COOKIE, _signer().dumps(session), httponly=True,
+                    samesite="lax", secure=True, max_age=_SESSION_MAX_AGE, path="/")
     return resp
 
 
@@ -728,15 +868,7 @@ async def auth_callback(request: Request, code: str = "", state: str = "", error
 
 @app.get("/auth/logout")
 async def auth_logout():
-    try:
-        cfg = await _oidc_cfg()
-        end_session = cfg.get("end_session_endpoint", f"{ZITADEL_ISSUER}/oidc/v1/end_session")
-    except Exception:
-        end_session = f"{ZITADEL_ISSUER}/oidc/v1/end_session"
-    resp = RedirectResponse(
-        url=f"{end_session}?post_logout_redirect_uri=https://{_PUBLIC_HOST}",
-        status_code=302,
-    )
+    resp = RedirectResponse(url="/auth/login", status_code=302)
     resp.delete_cookie(_SESSION_COOKIE, path="/")
     return resp
 
