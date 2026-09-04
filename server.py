@@ -557,7 +557,7 @@ def _portal_page(error: str = "", ok: str = "") -> str:
 <div class="grain"></div>
 <div class="card">
   <div class="brand">
-    <div class="logo"><img src="/footer-avatar.png" alt="CRCMZ" style="width:100%;height:100%;object-fit:cover;object-position:top center;display:block;"></div>
+    <div class="logo"><img src="/footer-avatar.png" alt="CRCMZ" style="width:100%;height:100%;object-fit:cover;object-position:center 20%;display:block;"></div>
     <div><h1>Link your PlayStation</h1>
       <p class="tag">One quick setup — then never again.</p></div>
   </div>
@@ -804,7 +804,7 @@ def _login_page(error: str = "", next: str = "/") -> str:
 </style></head>
 <body><div class="card">
   <div class="brand">
-    <div class="logo"><img src="/footer-avatar.png" alt="CRCMZ" style="width:100%;height:100%;object-fit:cover;object-position:top center;display:block;"></div>
+    <div class="logo"><img src="/footer-avatar.png" alt="CRCMZ" style="width:100%;height:100%;object-fit:cover;object-position:center 20%;display:block;"></div>
     <div><h1>CRCMZ APP</h1><p class="sub">Yes. We have one.</p></div>
   </div>
   {err_html}
@@ -3183,7 +3183,7 @@ _DASHBOARD_TMPL = r"""<!doctype html>
   .user-drop { position:absolute; top:calc(100% + 10px); right:0; min-width:150px;
     background:rgba(12,6,26,.97); border:1px solid rgba(255,47,214,.35); border-radius:14px;
     padding:8px; backdrop-filter:blur(20px); -webkit-backdrop-filter:blur(20px);
-    z-index:200; box-shadow:0 14px 40px rgba(0,0,0,.7); display:none; }
+    z-index:400; box-shadow:0 14px 40px rgba(0,0,0,.7); display:none; }
   .user-drop.open { display:block; animation:fade .18s ease both; }
   .ud-name { font-size:12px; color:var(--dim); padding:5px 10px 9px;
     border-bottom:1px solid rgba(255,255,255,.07); margin-bottom:7px;
@@ -3370,7 +3370,7 @@ _DASHBOARD_TMPL = r"""<!doctype html>
 
 <div class="wrap">
   <div class="top">
-    <div class="logo"><img src="/footer-avatar.png" alt="CRCMZ" style="width:100%;height:100%;object-fit:cover;object-position:top center;display:block;"></div>
+    <div class="logo"><img src="/footer-avatar.png" alt="CRCMZ" style="width:100%;height:100%;object-fit:cover;object-position:center 20%;display:block;"></div>
     <div><h1>CRCMZ APP</h1><p class="tag">Yes. We have one.</p></div>
     <div style="margin-left:auto">
       <div style="position:relative">__USER__</div>
