@@ -2262,6 +2262,54 @@ def api_clip_resend(message_uid: str):
     return {"status": "sent", "caption": caption, "wa": r.json()}
 
 
+_hype_cache: dict = {}
+_HYPE_MAX = 20  # messages = 100%
+
+@app.get("/api/hype")
+def api_hype():
+    """Count today's squad group messages and return a hype level."""
+    global _hype_cache
+    if not _v2_available or _squad_messenger is None:
+        return {"count": 0, "pct": 0, "label": "❄️ COLD", "level": "cold"}
+    now = _time.time()
+    if _hype_cache.get("ts", 0) > now - 60:
+        return _hype_cache["data"]
+    try:
+        msgs = _squad_messenger.get_messages(100)
+        import datetime as _dt
+        today = _dt.datetime.now(_dt.timezone.utc).date()
+        count = 0
+        for m in msgs:
+            ts = m.get("timestamp", "")
+            if not ts:
+                continue
+            try:
+                d = _dt.datetime.fromisoformat(str(ts).replace("Z", "+00:00")).date()
+                if d == today:
+                    count += 1
+            except Exception:
+                continue
+        pct = min(100, round(count / _HYPE_MAX * 100))
+        if count == 0:
+            label, level = "☠️ DEAD SILENT", "dead"
+        elif count < 4:
+            label, level = "❄️ COLD", "cold"
+        elif count < 9:
+            label, level = "🌡️ WARMING UP", "warm"
+        elif count < 15:
+            label, level = "🔥 HOT", "hot"
+        elif count < 20:
+            label, level = "🔥🔥 ON FIRE", "fire"
+        else:
+            label, level = "💥 HYPE OVERLOAD", "overload"
+        data = {"count": count, "pct": pct, "label": label, "level": level}
+        _hype_cache = {"ts": now, "data": data}
+        return data
+    except Exception as e:
+        logger.error("api/hype failed: %s", e)
+        return {"count": 0, "pct": 0, "label": "❄️ COLD", "level": "cold"}
+
+
 @app.get("/api/squad")
 def api_squad():
     """Live presence + trophy stats for every squad member (JSON, for the UI)."""
@@ -2605,6 +2653,38 @@ _DASHBOARD_TMPL = r"""<!doctype html>
   .stile .sl { font-size:9.5px; color:var(--dim); margin-top:6px; letter-spacing:.6px;
     text-transform:uppercase; }
 
+  /* ── Hype Meter ── */
+  .hype-wrap { margin-bottom:14px; padding:14px 16px; border-radius:16px;
+    background:var(--card); border:1px solid var(--line);
+    backdrop-filter:blur(18px); -webkit-backdrop-filter:blur(18px); }
+  .hype-head { display:flex; align-items:center; justify-content:space-between;
+    margin-bottom:10px; }
+  .hype-title { font-family:"Orbitron",sans-serif; font-size:9px; letter-spacing:2px;
+    color:var(--dim); text-transform:uppercase; }
+  .hype-label { font-size:13px; font-weight:700; letter-spacing:.5px;
+    font-family:"Rajdhani",sans-serif; }
+  .hype-count { font-family:"Orbitron",sans-serif; font-size:16px; font-weight:800;
+    background:linear-gradient(135deg,var(--cyan),var(--neon));
+    -webkit-background-clip:text; background-clip:text; color:transparent; }
+  .hype-track { height:10px; border-radius:99px; background:rgba(255,255,255,.07);
+    overflow:hidden; }
+  .hype-fill { height:100%; border-radius:99px; width:0%;
+    transition:width .8s cubic-bezier(.4,0,.2,1); }
+  .hype-fill.dead  { background:rgba(157,92,255,.4); }
+  .hype-fill.cold  { background:linear-gradient(90deg,#4488ff,#22e6ff);
+    box-shadow:0 0 10px rgba(34,230,255,.5); }
+  .hype-fill.warm  { background:linear-gradient(90deg,var(--cyan),var(--lime));
+    box-shadow:0 0 12px rgba(140,255,43,.45); }
+  .hype-fill.hot   { background:linear-gradient(90deg,var(--lime),var(--gold));
+    box-shadow:0 0 14px rgba(255,180,60,.55); animation:hypepulse 1.8s ease-in-out infinite; }
+  .hype-fill.fire  { background:linear-gradient(90deg,var(--gold),var(--neon));
+    box-shadow:0 0 18px rgba(255,47,214,.65); animation:hypepulse 1.2s ease-in-out infinite; }
+  .hype-fill.overload { background:linear-gradient(90deg,var(--neon),var(--cyan),var(--neon));
+    background-size:200% 100%; box-shadow:0 0 22px rgba(255,47,214,.8);
+    animation:hyperain 1s linear infinite, hypepulse .8s ease-in-out infinite; }
+  @keyframes hypepulse { 50% { filter:brightness(1.3) saturate(1.4); } }
+  @keyframes hyperain { to { background-position:200% 0; } }
+
   .lb-row { display:flex; align-items:center; gap:13px; padding:13px 4px;
     border-bottom:1px solid rgba(255,255,255,.05); }
   .lb-row:last-child { border-bottom:none; }
@@ -2819,6 +2899,17 @@ _DASHBOARD_TMPL = r"""<!doctype html>
       <div class="live" id="livecount"></div>
       <div style="position:relative">__USER__</div>
     </div>
+  </div>
+
+  <div class="hype-wrap" id="hypeMeter">
+    <div class="hype-head">
+      <div>
+        <div class="hype-title">Today's Hype</div>
+        <div class="hype-label" id="hypeLabel">…</div>
+      </div>
+      <div class="hype-count"><span id="hypeCount">—</span> msgs</div>
+    </div>
+    <div class="hype-track"><div class="hype-fill dead" id="hypeFill"></div></div>
   </div>
 
   <div class="tabs">
@@ -3061,6 +3152,20 @@ async function loadSquad(){
   } catch(e){ $('squad').innerHTML='<div class="empty">Couldn\'t load squad.</div>'; }
 }
 loadSquad(); setInterval(loadSquad, 30000);
+
+// ── Hype Meter ───────────────────────────────────────────────────────────────
+async function loadHype(){
+  try {
+    const d = await (await fetch('/api/hype')).json();
+    $('hypeLabel').textContent = d.label || '—';
+    $('hypeCount').textContent = d.count ?? '—';
+    const fill = $('hypeFill');
+    fill.className = 'hype-fill ' + (d.level || 'cold');
+    // defer width so transition fires after class change
+    requestAnimationFrame(()=>{ fill.style.width = (d.pct||0) + '%'; });
+  } catch(e){}
+}
+loadHype(); setInterval(loadHype, 60000);
 
 // ── Pipeline / Montage status ──────────────────────────────────────────────
 function fmtAgo(ts) {
