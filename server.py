@@ -2,8 +2,9 @@ import asyncio
 import os
 import json
 import logging
+from pathlib import Path
 from fastapi import FastAPI, HTTPException, Form, Request
-from fastapi.responses import HTMLResponse, RedirectResponse, JSONResponse
+from fastapi.responses import HTMLResponse, RedirectResponse, JSONResponse, Response
 from pydantic import BaseModel
 from psnawp_api import PSNAWP
 
@@ -100,6 +101,16 @@ def webauthn_related_origins():
 @app.get("/health")
 def health():
     return {"status": "ok", "user": client.online_id, "group": GROUP_ID}
+
+
+_FAVICON_PATH = Path(__file__).parent / "favicon.png"
+
+@app.get("/favicon.png", include_in_schema=False)
+def favicon():
+    if _FAVICON_PATH.exists():
+        return Response(_FAVICON_PATH.read_bytes(), media_type="image/png",
+                        headers={"Cache-Control": "public, max-age=86400"})
+    return Response(status_code=404)
 
 
 @app.post("/send")
@@ -294,6 +305,7 @@ def _portal_page(error: str = "", ok: str = "") -> str:
 <html lang="en"><head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<link rel="icon" type="image/png" href="/favicon.png">
 <title>Linked!</title>
 <style>
   :root {{ color-scheme:dark; }}
@@ -368,6 +380,7 @@ def _portal_page(error: str = "", ok: str = "") -> str:
 <html lang="en"><head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<link rel="icon" type="image/png" href="/favicon.png">
 <title>Link your PlayStation</title>
 <style>
   :root {{
@@ -671,6 +684,7 @@ def _login_page(error: str = "", next: str = "/") -> str:
 <html lang="en"><head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<link rel="icon" type="image/png" href="/favicon.png">
 <title>Sign in · Chat Board</title>
 <style>
   :root {{ color-scheme:dark; }}
@@ -2326,6 +2340,7 @@ _DASHBOARD_TMPL = r"""<!doctype html>
 <html lang="en"><head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<link rel="icon" type="image/png" href="/favicon.png">
 <title>Chat Board · PSN</title>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
