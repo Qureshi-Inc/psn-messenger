@@ -1029,9 +1029,11 @@ async def passkey_begin(request: Request):
             logger.warning("passkey/begin: %s for loginName=%s", r.status_code, login_name)
             return JSONResponse({"error": "user not found"}, status_code=404)
         data = r.json()
-        options = data.get("challenges", {}).get("webAuthN", {}).get("publicKeyCredentialRequestOptions")
-        if not options:
+        raw = data.get("challenges", {}).get("webAuthN", {}).get("publicKeyCredentialRequestOptions")
+        if not raw:
             return JSONResponse({"error": "no webauthn challenge returned"}, status_code=500)
+        # Zitadel wraps request options as {"publicKey": {...}} — unwrap like creation options.
+        options = raw.get("publicKey") or raw
         return JSONResponse({"sessionId": data["sessionId"], "options": options})
     except Exception as e:
         logger.error("passkey/begin error: %s", e)
