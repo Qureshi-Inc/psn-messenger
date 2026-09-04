@@ -1697,13 +1697,14 @@ def _dashboard_html(user_email: str = "") -> str:
     if user_email:
         disp = user_email.split("@")[0] if "@" in user_email else user_email
         user_html = (
-            f'<div class="user-chip">'
-            f'<span class="uc-name">{disp}</span>'
-            f'<a class="uc-logout" href="/auth/logout">Sign out</a>'
-            f'</div>'
+            '<button class="user-btn" id="userBtn" onclick="toggleUserMenu()" aria-label="Account">👤</button>'
+            '<div class="user-drop" id="userMenu">'
+            f'<div class="ud-name">{disp}</div>'
+            '<a class="ud-item" href="/auth/logout">Sign out</a>'
+            '</div>'
         )
     else:
-        user_html = '<a class="uc-logout" href="/auth/login">Sign in</a>'
+        user_html = '<a class="ud-item" href="/auth/login" style="padding:8px 12px;font-size:12px">Sign in</a>'
     return (_DASHBOARD_TMPL
             .replace("__SOUNDBOARD__", _soundboard_json())
             .replace("__USER__", user_html))
@@ -1982,21 +1983,30 @@ _DASHBOARD_TMPL = r"""<!doctype html>
     flex:none; white-space:nowrap; }
   .cage { color:var(--dim); font-size:11px; flex:none; margin-left:auto; }
 
-  .user-chip { display:flex; align-items:center; gap:7px; }
-  .uc-name { font-size:11px; color:var(--dim); font-weight:600; letter-spacing:.3px;
-    max-width:90px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
-  .uc-logout { font-size:11px; color:var(--neon); text-decoration:none; font-weight:700;
-    padding:4px 10px; border:1px solid rgba(255,47,214,.4); border-radius:8px;
-    white-space:nowrap; transition:background .15s; }
-  .uc-logout:hover { background:rgba(255,47,214,.12); }
+  .user-btn { width:36px; height:36px; border-radius:50%; border:1.5px solid rgba(255,47,214,.5);
+    background:rgba(255,47,214,.1); color:var(--neon); font-size:17px; cursor:pointer;
+    display:grid; place-items:center; flex:none; padding:0; }
+  .user-btn:active { background:rgba(255,47,214,.22); }
+  .user-drop { position:absolute; top:calc(100% + 10px); right:0; min-width:150px;
+    background:rgba(12,6,26,.97); border:1px solid rgba(255,47,214,.35); border-radius:14px;
+    padding:8px; backdrop-filter:blur(20px); -webkit-backdrop-filter:blur(20px);
+    z-index:200; box-shadow:0 14px 40px rgba(0,0,0,.7); display:none; }
+  .user-drop.open { display:block; animation:fade .18s ease both; }
+  .ud-name { font-size:12px; color:var(--dim); padding:5px 10px 9px;
+    border-bottom:1px solid rgba(255,255,255,.07); margin-bottom:7px;
+    overflow:hidden; text-overflow:ellipsis; white-space:nowrap; font-weight:600; }
+  .ud-item { display:block; padding:10px; border-radius:10px; font-size:13.5px;
+    font-weight:700; color:var(--neon); text-decoration:none; text-align:center;
+    background:rgba(255,47,214,.08); border:1px solid rgba(255,47,214,.25); }
+  .ud-item:hover { background:rgba(255,47,214,.18); }
 </style></head>
 <body><div class="wrap">
   <div class="top">
     <div class="logo">🎮</div>
-    <div><h1>The Squad</h1><p class="tag">Tap to blast the group · live PSN status</p></div>
-    <div style="margin-left:auto;display:flex;flex-direction:column;align-items:flex-end;gap:8px">
+    <div><h1>The Squad</h1><p class="tag">PSN · Live</p></div>
+    <div style="margin-left:auto;display:flex;align-items:center;gap:10px">
       <div class="live" id="livecount"></div>
-      __USER__
+      <div style="position:relative">__USER__</div>
     </div>
   </div>
 
@@ -2326,5 +2336,14 @@ ${(d.clips||[]).length ? `<div class="pip-section">
 }
 loadPipeline();
 setInterval(loadPipeline, 30000);
+
+function toggleUserMenu(){
+  const m=$('userMenu'); if(!m) return; m.classList.toggle('open');
+}
+document.addEventListener('click', e => {
+  const btn=$('userBtn'), menu=$('userMenu');
+  if(btn && menu && !btn.contains(e.target) && !menu.contains(e.target))
+    menu.classList.remove('open');
+});
 </script>
 </body></html>"""
