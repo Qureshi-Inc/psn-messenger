@@ -189,23 +189,19 @@ def v2_send_message(req: MessageRequest, request: Request):
     if not req.message.strip():
         raise HTTPException(status_code=400, detail="Message cannot be empty")
     try:
-        # Send as the logged-in user's PSN account if they have one linked.
-        # Falls back to the server (crcmz-mod) account transparently.
-        session = _get_session(request)
-        user_token = None
-        if session:
-            user_token = portal_mod.get_fresh_access_token(session.get("sub", ""))
-        if user_token:
-            try:
-                user_messenger = PSNMessenger(_DirectAuth(user_token), GROUP_ID)
-                success = user_messenger.send_message(req.message.strip())
-            except Exception as ue:
-                logger.warning("v2: user-token send failed (%s), falling back to server account", ue)
-                success = False
-            if not success:
-                # User's PSN account may not be in this group — fall back to server account.
-                success = psn_messenger.send_message(req.message.strip())
-        else:
+        # Try to send as the logged-in user's PSN account; always fall back to
+        # the server (crcmz-mod) account if anything goes wrong.
+        success = False
+        try:
+            session = _get_session(request)
+            if session:
+                user_token = portal_mod.get_fresh_access_token(session.get("sub", ""))
+                if user_token:
+                    user_messenger = PSNMessenger(_DirectAuth(user_token), GROUP_ID)
+                    success = user_messenger.send_message(req.message.strip())
+        except Exception as ue:
+            logger.warning("v2: user-token send failed (%s), falling back to server account", ue)
+        if not success:
             success = psn_messenger.send_message(req.message.strip())
         if success:
             return {"status": "sent", "message": req.message.strip(), "version": "v2"}
@@ -894,11 +890,12 @@ def _login_page(error: str = "", next: str = "/") -> str:
   }}
   _startConditional();
 
-  // Explicit button: abort any pending conditional request, then show the picker immediately.
+  // Explicit button: abort any pending conditional request, then show the picker.
   async function passkeyLogin() {{
     if (!window.PublicKeyCredential) {{ showErr('Passkeys not supported in this browser.'); return; }}
     if (_conditionalAbort) {{ _conditionalAbort.abort(); _conditionalAbort = null; }}
     const identifier = document.getElementById('em').value.trim();
+    if (!identifier) {{ document.getElementById('em').focus(); showErr('Enter your email first, then tap the passkey button.'); return; }}
     const btn = document.getElementById('pkBtn');
     btn.disabled = true; btn.textContent = '🔑 Waiting for passkey…';
     try {{
