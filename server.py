@@ -633,9 +633,8 @@ ZITADEL_SERVICE_TOKEN = os.environ.get("ZITADEL_SERVICE_TOKEN", "")
 SESSION_SECRET        = os.environ.get("SESSION_SECRET", "")
 
 # WhatsApp import authorization — BOTH conditions must hold
-WHATSAPP_IMPORT_ALLOWED_ROLE     = os.environ.get("WHATSAPP_IMPORT_ALLOWED_ROLE", "IAM Owner Viewer")
-WHATSAPP_IMPORT_ALLOWED_ZITADEL_SUB = os.environ.get("WHATSAPP_IMPORT_ALLOWED_ZITADEL_SUB", "")
-WA_INGEST_SECRET                 = os.environ.get("WA_INGEST_SECRET", "")
+WHATSAPP_IMPORT_ALLOWED_ROLE = os.environ.get("WHATSAPP_IMPORT_ALLOWED_ROLE", "IAM Owner Viewer")
+WA_INGEST_SECRET             = os.environ.get("WA_INGEST_SECRET", "")
 
 _SESSION_COOKIE    = "psn_session"
 _OIDC_STATE_COOKIE = "psn_oidc_state"
@@ -1387,15 +1386,9 @@ _import_auth_cache: dict[str, tuple[bool, float]] = {}
 
 
 async def _is_whatsapp_importer(session: dict) -> bool:
-    """True iff session sub matches configured Moiz sub AND has the required Zitadel role.
-
-    Both conditions must hold. Result cached for 5 minutes.
-    """
+    """True iff session user has the required Zitadel role. Result cached for 5 minutes."""
     sub = session.get("sub", "")
-    allowed_sub = WHATSAPP_IMPORT_ALLOWED_ZITADEL_SUB
-    if not sub or not allowed_sub or sub != allowed_sub:
-        return False
-    if not WHATSAPP_IMPORT_ALLOWED_ROLE or not ZITADEL_SERVICE_TOKEN:
+    if not sub or not WHATSAPP_IMPORT_ALLOWED_ROLE or not ZITADEL_SERVICE_TOKEN:
         return False
     import time as _t
     now = _t.time()
@@ -1515,7 +1508,7 @@ async def wa_import(
     file: UploadFile = File(...),
     group_jid: str = Form(default=""),
 ):
-    """Import a WhatsApp export. Moiz-only (Zitadel sub + role check)."""
+    """Import a WhatsApp export. Requires WHATSAPP_IMPORT_ALLOWED_ROLE."""
     session = _get_session(request)
     if not session:
         raise HTTPException(status_code=401, detail="authentication required")
