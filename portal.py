@@ -266,6 +266,50 @@ def list_users() -> list[dict]:
     return out
 
 
+def list_unclaimed() -> list[dict]:
+    """Return PSN records that have no zitadel_user_id — available to be claimed."""
+    out: list[dict] = []
+    if not USERS_DIR.exists():
+        return out
+    for f in sorted(USERS_DIR.glob("*.json")):
+        try:
+            d = json.loads(f.read_text())
+        except Exception:  # noqa: BLE001
+            continue
+        if d.get("zitadel_user_id"):
+            continue
+        out.append({
+            "key": f.stem,
+            "mm_username": d.get("mm_username"),
+            "online_id": d.get("online_id"),
+            "linked_at": d.get("linked_at"),
+        })
+    return out
+
+
+def claim_record(key: str, zitadel_user_id: str) -> bool:
+    """Assign zitadel_user_id to the record identified by key (filename stem).
+
+    Returns True on success, False if not found or already claimed.
+    """
+    if not USERS_DIR.exists():
+        return False
+    f = USERS_DIR / f"{key}.json"
+    if not f.exists():
+        return False
+    try:
+        d = json.loads(f.read_text())
+    except Exception:  # noqa: BLE001
+        return False
+    if d.get("zitadel_user_id"):
+        return False  # already claimed
+    d["zitadel_user_id"] = zitadel_user_id
+    f.write_text(json.dumps(d, indent=2))
+    logger.info("portal: claimed key=%s by zitadel_user_id=%s online_id=%s",
+                key, zitadel_user_id, d.get("online_id"))
+    return True
+
+
 def find_by_zitadel_id(zitadel_user_id: str) -> dict | None:
     """Return the PSN record for a given Zitadel user ID, or None."""
     if not zitadel_user_id or not USERS_DIR.exists():

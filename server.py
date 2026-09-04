@@ -1255,17 +1255,37 @@ async def settings_change_password(request: Request):
 
 @app.get("/auth/settings/psn")
 async def settings_psn_status(request: Request):
-    """Return the PSN link status for the currently logged-in user."""
+    """Return the PSN link status for the currently logged-in user, plus any unclaimed records."""
     session = _get_session(request)
     if not session:
         return JSONResponse({"error": "not authenticated"}, status_code=401)
     user_id = session.get("sub", "")
     if not user_id:
-        return JSONResponse({"linked": False})
+        return JSONResponse({"linked": False, "unclaimed": []})
     record = portal_mod.find_by_zitadel_id(user_id)
-    if not record:
-        return JSONResponse({"linked": False})
-    return JSONResponse({"linked": True, **record})
+    if record:
+        return JSONResponse({"linked": True, **record})
+    unclaimed = portal_mod.list_unclaimed()
+    return JSONResponse({"linked": False, "unclaimed": unclaimed})
+
+
+@app.post("/auth/settings/psn/claim")
+async def settings_psn_claim(request: Request):
+    """Claim an unassigned PSN record for the logged-in user."""
+    session = _get_session(request)
+    if not session:
+        return JSONResponse({"error": "not authenticated"}, status_code=401)
+    user_id = session.get("sub", "")
+    if not user_id:
+        return JSONResponse({"error": "not authenticated"}, status_code=401)
+    body = await request.json()
+    key = (body.get("key") or "").strip()
+    if not key or "/" in key or ".." in key:
+        return JSONResponse({"error": "invalid key"}, status_code=400)
+    ok = portal_mod.claim_record(key, user_id)
+    if not ok:
+        return JSONResponse({"error": "record not found or already claimed"}, status_code=404)
+    return JSONResponse({"ok": True})
 
 
 @app.get("/auth/logout")
@@ -3054,33 +3074,63 @@ function switchTab(name){
 async function loadPsnStatus(){
   const el=$('psnStatus');
   if(!el) return;
-  el.innerHTML='Loading…';
+  el.innerHTML='<span style="color:var(--dim)">Loading…</span>';
   try {
     const r = await fetch('/auth/settings/psn');
     const d = await r.json();
-    if(!d.linked){
-      el.innerHTML='<span style="color:var(--dim)">No PlayStation account linked to your profile yet.</span>';
+    if(d.linked){
+      const linked = d.linked_at ? new Date(d.linked_at*1000).toLocaleDateString() : null;
+      const expiry = d.refresh_expires_at ? new Date(d.refresh_expires_at*1000) : null;
+      const expired = expiry && expiry < new Date();
+      el.innerHTML =
+        `<div style="display:flex;align-items:center;gap:10px;margin-bottom:14px">
+          <span style="font-size:28px">🎮</span>
+          <div>
+            <div style="color:#fff;font-weight:700;font-size:16px">${d.online_id||'—'}</div>
+            ${linked?`<div style="font-size:11px;color:var(--dim)">Linked ${linked}</div>`:''}
+          </div>
+          <span style="margin-left:auto;font-size:12px;padding:3px 9px;border-radius:20px;font-weight:700;
+            background:${expired?'rgba(255,60,60,.15)':'rgba(0,220,120,.12)'};
+            color:${expired?'#ff6060':'#00dc78'};
+            border:1px solid ${expired?'rgba(255,60,60,.3)':'rgba(0,220,120,.3)'}">
+            ${expired?'Expired':'Active'}
+          </span>
+        </div>
+        ${expired?'<div style="font-size:12.5px;color:#ff9060;margin-bottom:10px">⚠️ Your PSN token has expired. Re-link to refresh it.</div>':''}`;
       return;
     }
-    const linked = d.linked_at ? new Date(d.linked_at*1000).toLocaleDateString() : null;
-    const expiry = d.refresh_expires_at ? new Date(d.refresh_expires_at*1000) : null;
-    const expired = expiry && expiry < new Date();
-    el.innerHTML =
-      `<div style="display:flex;align-items:center;gap:10px;margin-bottom:14px">
-        <span style="font-size:28px">🎮</span>
-        <div>
-          <div style="color:#fff;font-weight:700;font-size:16px">${d.online_id||'—'}</div>
-          ${linked?`<div style="font-size:11px;color:var(--dim)">Linked ${linked}</div>`:''}
-        </div>
-        <span style="margin-left:auto;font-size:12px;padding:3px 9px;border-radius:20px;font-weight:700;
-          background:${expired?'rgba(255,60,60,.15)':'rgba(0,220,120,.12)'};
-          color:${expired?'#ff6060':'#00dc78'};
-          border:1px solid ${expired?'rgba(255,60,60,.3)':'rgba(0,220,120,.3)'}">
-          ${expired?'Expired':'Active'}
-        </span>
-      </div>
-      ${expired?'<div style="font-size:12.5px;color:#ff9060;margin-bottom:10px">⚠️ Your PSN token has expired. Re-link to refresh it.</div>':''}`;
-  } catch(e){ el.innerHTML='Could not load PSN status.'; }
+    // Not linked — show unclaimed accounts to claim, or prompt to link fresh
+    const unclaimed = d.unclaimed || [];
+    let html = '';
+    if(unclaimed.length){
+      html += `<p style="font-size:12.5px;color:var(--dim);margin:0 0 12px">
+        Select your existing PSN account below, or link a new one.</p>`;
+      html += unclaimed.map(u => {
+        const dt = u.linked_at ? new Date(u.linked_at*1000).toLocaleDateString() : '';
+        return `<div class="pk-row" style="margin-bottom:8px">
+          <div class="pk-info">
+            <span class="pk-name">${u.online_id||u.mm_username||'Unknown'}</span>
+            ${dt?`<span class="pk-date">Linked ${dt}</span>`:''}
+          </div>
+          <button class="smodal-btn" style="width:auto;margin:0;padding:6px 13px;font-size:12px"
+            onclick="claimPsn('${u.key}','${u.online_id||u.mm_username||''}')">This is mine</button>
+        </div>`;
+      }).join('');
+    } else {
+      html = '<span style="color:var(--dim);font-size:13.5px">No PlayStation account linked yet.</span>';
+    }
+    el.innerHTML = html;
+  } catch(e){ el.innerHTML='<span style="color:#ff7070">Could not load PSN status.</span>'; }
+}
+
+async function claimPsn(key, name){
+  if(!confirm(`Claim "${name}" as your PlayStation account?`)) return;
+  const r = await fetch('/auth/settings/psn/claim',{
+    method:'POST', headers:{'Content-Type':'application/json'},
+    body: JSON.stringify({key}),
+  });
+  if(r.ok){ loadPsnStatus(); }
+  else { alert('Could not claim — it may already be assigned.'); }
 }
 
 function _pkMsg(msg, type){ const el=$('pkMsg'); el.className='smsg '+type; el.textContent=msg; }
