@@ -714,7 +714,7 @@ def _login_page(error: str = "", next: str = "/") -> str:
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
 <link rel="icon" type="image/png" href="/favicon.png">
-<title>Sign in · Chat Board</title>
+<title>Sign in · PS HQ</title>
 <style>
   :root {{ color-scheme:dark; }}
   * {{ box-sizing:border-box; -webkit-tap-highlight-color:transparent; }}
@@ -784,7 +784,7 @@ def _login_page(error: str = "", next: str = "/") -> str:
 <body><div class="card">
   <div class="brand">
     <div class="logo">🎮</div>
-    <div><h1>Chat Board</h1><p class="sub">Members only</p></div>
+    <div><h1>PS HQ</h1><p class="sub">Members only</p></div>
   </div>
   {err_html}
   <form method="post" action="/auth/login?next={safe_next}" id="f">
@@ -2462,7 +2462,7 @@ _DASHBOARD_TMPL = r"""<!doctype html>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
 <link rel="icon" type="image/png" href="/favicon.png">
-<title>Chat Board · PSN</title>
+<title>PS HQ · PSN</title>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Orbitron:wght@600;800;900&family=Rajdhani:wght@500;600;700&display=swap" rel="stylesheet">
@@ -2583,21 +2583,14 @@ _DASHBOARD_TMPL = r"""<!doctype html>
   .tabs { display:flex; gap:6px; background:var(--card); border:1px solid var(--line);
     padding:5px; border-radius:16px; margin:14px 0; backdrop-filter:blur(18px);
     -webkit-backdrop-filter:blur(18px); }
-  .tab { flex:1; display:flex; flex-direction:column; align-items:center; justify-content:center;
-    gap:3px; padding:10px 4px; border-radius:11px; border:none; background:none;
-    color:var(--dim); cursor:pointer;
-    transition:background .15s,color .15s,box-shadow .15s; }
-  .tab-icon { font-size:17px; line-height:1; }
-  .tab-txt { font-family:"Rajdhani",sans-serif; font-size:11px; font-weight:700;
-    letter-spacing:.8px; text-transform:uppercase; white-space:nowrap; }
+  .tab { flex:1; text-align:center; padding:10px 4px; border-radius:11px; border:none;
+    background:none; color:var(--dim); cursor:pointer; white-space:nowrap; overflow:hidden;
+    text-overflow:ellipsis; font-family:"Rajdhani",sans-serif;
+    font-size:clamp(11px,3vw,13px); font-weight:700; letter-spacing:.5px;
+    text-transform:uppercase; transition:background .15s,color .15s,box-shadow .15s; }
+  .tab-icon { display:none; }
   .tab.on { background:linear-gradient(135deg,var(--neon),var(--violet)); color:#fff;
     box-shadow:0 0 16px rgba(255,47,214,.5); }
-  .tab.on .tab-txt { color:#fff; }
-  @media (min-width:420px) {
-    .tab { flex-direction:row; gap:6px; padding:10px 8px; }
-    .tab-icon { font-size:15px; }
-    .tab-txt { font-size:12.5px; letter-spacing:.5px; }
-  }
   .panel { display:none; } .panel.on { display:block; animation:fade .3s ease both; }
   @keyframes fade { from { opacity:0; transform:translateY(6px); } }
 
@@ -2903,7 +2896,7 @@ _DASHBOARD_TMPL = r"""<!doctype html>
 <div class="wrap">
   <div class="top">
     <div class="logo">🎮</div>
-    <div><h1>Chat Board</h1><p class="tag">PSN · Live</p></div>
+    <div><h1>PS HQ</h1><p class="tag">PSN · Live</p></div>
     <div style="margin-left:auto;display:flex;align-items:center;gap:10px">
       <div class="live" id="livecount"></div>
       <div style="position:relative">__USER__</div>
