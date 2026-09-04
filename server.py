@@ -2555,28 +2555,52 @@ _DASHBOARD_TMPL = r"""<!doctype html>
   .top .live b { color:var(--lime); font-size:16px; font-family:"Orbitron",sans-serif;
     text-shadow:0 0 12px rgba(140,255,43,.6); }
 
-  /* STICKY SOUNDBOARD -- the hero. Always at top, compact, tappable. */
-  /* Soundboard pinned to the BOTTOM of the screen -- always thumb-reachable. */
+  /* ── Chat Board (sticky bottom) ── */
   .board-wrap { position:fixed; left:0; right:0; bottom:0; z-index:30;
     padding:10px 14px calc(12px + env(safe-area-inset-bottom));
     background:linear-gradient(0deg, rgba(7,11,24,.97) 72%, rgba(7,11,24,0));
     backdrop-filter:blur(10px); -webkit-backdrop-filter:blur(10px);
-    border-top:1px solid var(--line); }
+    border-top:1px solid var(--line);
+    transition:top .25s ease, border-radius .25s ease, background .25s ease; }
   .board-wrap > * { max-width:760px; margin:0 auto; }
-  .board-title { display:flex; align-items:center; justify-content:space-between;
-    width:100%; font-size:12px; letter-spacing:2px; color:var(--cyan);
-    text-transform:uppercase; margin:0 0 8px; font-weight:700; padding:4px 4px;
-    background:none; border:none; cursor:pointer; font-family:"Orbitron",sans-serif;
-    text-shadow:0 0 10px rgba(34,230,255,.4); }
-  .board-title .chev { transition:transform .25s ease; font-size:13px; }
+  /* fullscreen: covers the whole viewport */
+  .board-wrap.fullscreen { top:0; border-radius:0; overflow-y:auto;
+    background:rgba(7,11,24,.99); border-top:none; padding-top:calc(10px + env(safe-area-inset-top)); }
+  .board-wrap.fullscreen .board { max-height:none; overflow-y:visible; }
+  /* header row: fs icon + toggle button */
+  .board-hdr { display:flex; align-items:center; gap:8px; margin:0 0 8px; }
+  .board-fs-btn { flex:none; width:32px; height:32px; border:1px solid rgba(34,230,255,.28);
+    border-radius:9px; background:none; color:var(--cyan); cursor:pointer; font-size:15px;
+    display:grid; place-items:center; transition:background .12s, border-color .12s; }
+  .board-fs-btn:active { background:rgba(34,230,255,.18); }
+  .board-toggle-btn { flex:1; display:flex; align-items:center; justify-content:space-between;
+    font-size:12px; letter-spacing:2px; color:var(--cyan); text-transform:uppercase;
+    font-weight:700; padding:4px 4px; background:none; border:none; cursor:pointer;
+    font-family:"Orbitron",sans-serif; text-shadow:0 0 10px rgba(34,230,255,.4); }
+  .board-toggle-btn .chev { transition:transform .25s ease; font-size:13px; }
+  .board-wrap.collapsed .chev { transform:rotate(-90deg); }
+  /* hint shown briefly under the title to teach the toggle */
+  .board-hint { font-size:10px; color:var(--dim); text-align:center; margin:-4px 0 6px;
+    opacity:0; animation:hintfade 4s ease 1.2s forwards; pointer-events:none; }
+  @keyframes hintfade { 0%{opacity:0} 15%{opacity:.5} 85%{opacity:.5} 100%{opacity:0} }
   .board { display:grid; grid-template-columns:repeat(3,1fr); gap:8px;
     max-height:52vh; overflow-y:auto; -webkit-overflow-scrolling:touch;
     transition:max-height .28s ease, opacity .2s ease, margin .28s ease; }
-  /* collapsed: hide the buttons grid, keep title + quick-send visible */
+  /* collapsed: hide buttons grid */
   .board-wrap.collapsed .board { max-height:0; opacity:0; overflow:hidden;
     margin-bottom:-8px; pointer-events:none; }
-  .board-wrap.collapsed .chev { transform:rotate(-90deg); }
-  /* ad-hoc quick-send row -- for one-off messages so people don't make buttons */
+  /* organize mode: wiggle + grab cursor */
+  .board-wrap.organizing .snd:not(.add) { animation:wiggle .35s ease infinite alternate;
+    cursor:grab; touch-action:none; }
+  @keyframes wiggle { from{transform:rotate(-.6deg) scale(1)} to{transform:rotate(.6deg) scale(1.01)} }
+  .snd.drag-ghost { opacity:.35; transform:scale(.92)!important; }
+  .snd.drop-target { border-color:var(--cyan)!important;
+    box-shadow:0 0 22px rgba(34,230,255,.55)!important; transform:scale(1.06)!important; }
+  .board-done-btn { display:none; width:100%; margin-top:10px; padding:13px;
+    border-radius:13px; border:none; cursor:pointer; font-weight:800; font-size:14px;
+    font-family:"Orbitron",sans-serif; letter-spacing:1px;
+    background:linear-gradient(135deg,var(--cyan),var(--neon)); color:#07080f; }
+  /* ad-hoc quick-send row */
   .quick { display:flex; gap:8px; margin-top:10px; }
   .quick input { flex:1; padding:13px 15px; border-radius:12px; font-size:15px;
     border:1px solid rgba(34,230,255,.28); background:rgba(6,4,18,.8); color:var(--txt);
@@ -3062,9 +3086,13 @@ _DASHBOARD_TMPL = r"""<!doctype html>
 </div>
 
 <div class="board-wrap" id="boardWrap">
-  <button class="board-title" id="boardToggle" onclick="toggleBoard()">
-    <span>🔊 Soundboard</span><span class="chev" id="chev">▾</span>
-  </button>
+  <div class="board-hdr">
+    <button class="board-fs-btn" id="boardFsBtn" onclick="toggleBoardFs()" title="Fullscreen">⛶</button>
+    <button class="board-toggle-btn" onclick="toggleBoard()">
+      <span>Chat Board</span><span class="chev" id="chev">▾</span>
+    </button>
+  </div>
+  <div class="board-hint" id="boardHint">tap title to minimize · hold in fullscreen to organize</div>
   <div class="board" id="board"></div>
   <div class="quick">
     <input id="quick" type="text" placeholder="Send a quick message to the squad…"
@@ -3072,58 +3100,148 @@ _DASHBOARD_TMPL = r"""<!doctype html>
       onkeydown="if(event.key==='Enter')sendQuick()">
     <button class="qsend" onclick="sendQuick()" aria-label="Send">➤</button>
   </div>
+  <button class="board-done-btn" id="boardDoneBtn" onclick="exitOrganize()">✓ Done Organizing</button>
 </div>
 <div class="toast" id="toast"></div>
 <script>
 const SOUNDBOARD = __SOUNDBOARD__;
-const MY_PSN_ID = __PSN_ID__;  // injected server-side, "" if not linked
+const MY_PSN_ID = __PSN_ID__;
 let MY_AVATAR = null, MOD_AVATAR = null;
 const $ = id => document.getElementById(id);
 const esc = s => (s||'').replace(/[&<>"]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
 const toast = m => { const t=$('toast'); t.textContent=m; t.classList.add('show');
   setTimeout(()=>t.classList.remove('show'),2000); };
 
-// Build the soundboard (mutable so custom adds refresh it live)
+// ── Chat Board state ─────────────────────────────────────────────────────────
 let BUTTONS = SOUNDBOARD.slice();
+let _isFullscreen = false, _organizeMode = false;
+
 function renderButtons(){
   $('board').innerHTML = BUTTONS.map((b,i)=>
     '<button class="snd '+(b.cls||'c1')+(b.custom?' custom':'')+'" data-i="'+i+'" '+
-    'onclick="fire(this)">'+esc(b.label)+'</button>'
+    (_organizeMode ? 'style="touch-action:none"' : 'onclick="fire(this)"')+'>'+esc(b.label)+'</button>'
   ).join('') +
-    '<button class="snd add" onclick="openCustom()">＋ Custom</button>';
-  bindLongPress();
+    (_organizeMode ? '' : '<button class="snd add" onclick="openCustom()">＋ Custom</button>');
+  if(_organizeMode) bindDrag();
+  else bindLongPress();
   syncBoardHeight();
 }
-// Press-and-hold (600ms) on a CUSTOM button to delete it. Works on touch and
-// mouse; the hold cancels the normal click so it doesn't also fire the message.
-let _lpTimer=null, _lpFired=false;
-function bindLongPress(){
-  document.querySelectorAll('.snd.custom').forEach(el=>{
-    const i=el.dataset.i;
-    const start=(ev)=>{ _lpFired=false; el.classList.add('holding');
-      _lpTimer=setTimeout(()=>{ _lpFired=true; el.classList.remove('holding');
-        if(navigator.vibrate) navigator.vibrate(30); delBtn(ev,i); },600); };
-    const cancel=()=>{ clearTimeout(_lpTimer); el.classList.remove('holding'); };
-    el.addEventListener('touchstart',start,{passive:true});
-    el.addEventListener('touchend',cancel); el.addEventListener('touchmove',cancel);
-    el.addEventListener('mousedown',start);
-    el.addEventListener('mouseup',cancel); el.addEventListener('mouseleave',cancel);
-  });
-}
-// Keep the page's bottom padding == the fixed soundboard's real height so the
-// squad list is never hidden behind it (fixes the "users cut off / can't scroll").
+
+// ── Collapse / expand ────────────────────────────────────────────────────────
 function syncBoardHeight(){
   const bar = document.querySelector('.board-wrap');
-  if(bar) document.body.style.setProperty('--board-h', (bar.offsetHeight + 16) + 'px');
+  if(bar) document.body.style.setProperty('--board-h', (_isFullscreen ? 0 : bar.offsetHeight + 16) + 'px');
 }
-// Collapsible soundboard. Default = expanded; remembers the user's choice.
 function toggleBoard(){
+  if(_isFullscreen) return;
   const w=$('boardWrap'); w.classList.toggle('collapsed');
   try{ localStorage.setItem('sb_collapsed', w.classList.contains('collapsed')?'1':'0'); }catch(e){}
   setTimeout(syncBoardHeight,300);
 }
 if(localStorage.getItem('sb_collapsed')==='1') $('boardWrap').classList.add('collapsed');
 window.addEventListener('resize', syncBoardHeight);
+
+// ── Fullscreen ───────────────────────────────────────────────────────────────
+function toggleBoardFs(){
+  _isFullscreen = !_isFullscreen;
+  const w=$('boardWrap');
+  w.classList.toggle('fullscreen', _isFullscreen);
+  w.classList.toggle('collapsed', false);
+  $('boardFsBtn').textContent = _isFullscreen ? '✕' : '⛶';
+  if(!_isFullscreen && _organizeMode) exitOrganize();
+  document.body.style.overflow = _isFullscreen ? 'hidden' : '';
+  syncBoardHeight();
+}
+
+// ── Organize mode (fullscreen only, long-press any button) ───────────────────
+function enterOrganize(){
+  if(!_isFullscreen) return;
+  _organizeMode = true;
+  $('boardWrap').classList.add('organizing');
+  $('boardDoneBtn').style.display = 'block';
+  renderButtons();
+  if(navigator.vibrate) navigator.vibrate([20,40,20]);
+}
+function exitOrganize(){
+  _organizeMode = false;
+  $('boardWrap').classList.remove('organizing');
+  $('boardDoneBtn').style.display = 'none';
+  _saveOrder();
+  renderButtons();
+}
+function _saveOrder(){
+  try{ localStorage.setItem('cb_order', JSON.stringify(BUTTONS.map(b=>b.label))); }catch(e){}
+}
+
+// ── Drag-to-reorder (touch + mouse) ─────────────────────────────────────────
+let _drag = null;
+function bindDrag(){
+  document.querySelectorAll('.snd').forEach((el,idx)=>{
+    el.addEventListener('pointerdown', ev=>{
+      el.setPointerCapture(ev.pointerId);
+      const r = el.getBoundingClientRect();
+      const clone = el.cloneNode(true);
+      clone.style.cssText = 'position:fixed;left:'+r.left+'px;top:'+r.top+'px;width:'+r.width+'px;height:'+r.height+'px;z-index:999;opacity:.88;pointer-events:none;border-radius:13px;transition:none';
+      document.body.appendChild(clone);
+      _drag = { idx, clone, ox: ev.clientX-r.left, oy: ev.clientY-r.top, cur: idx };
+      el.classList.add('drag-ghost');
+    },{passive:true});
+    el.addEventListener('pointermove', ev=>{
+      if(!_drag || _drag.idx!==idx) return;
+      _drag.clone.style.left = (ev.clientX-_drag.ox)+'px';
+      _drag.clone.style.top  = (ev.clientY-_drag.oy)+'px';
+      // find closest button
+      const btns=[...document.querySelectorAll('.snd')];
+      let ci=-1, cd=Infinity;
+      btns.forEach((b,i)=>{ const r=b.getBoundingClientRect(),cx=r.left+r.width/2,cy=r.top+r.height/2,d=Math.hypot(ev.clientX-cx,ev.clientY-cy);
+        if(d<cd){cd=d;ci=i;} });
+      if(ci!==_drag.cur){
+        btns.forEach((b,i)=>b.classList.toggle('drop-target',i===ci&&i!==_drag.idx));
+        _drag.cur=ci;
+      }
+    },{passive:true});
+    el.addEventListener('pointerup', ()=>{
+      if(!_drag || _drag.idx!==idx) return;
+      _drag.clone.remove();
+      document.querySelectorAll('.snd').forEach(b=>{ b.classList.remove('drag-ghost','drop-target'); });
+      if(_drag.cur !== _drag.idx && _drag.cur >= 0){
+        const [item] = BUTTONS.splice(_drag.idx, 1);
+        BUTTONS.splice(_drag.cur, 0, item);
+        renderButtons();
+      }
+      _drag = null;
+    },{passive:true});
+  });
+}
+
+// ── Long-press: delete custom (normal) or enter organize (fullscreen) ────────
+let _lpTimer=null, _lpFired=false;
+function bindLongPress(){
+  document.querySelectorAll('.snd.custom').forEach(el=>{
+    const i=el.dataset.i;
+    const start=(ev)=>{
+      if(_isFullscreen){ _lpFired=false; _lpTimer=setTimeout(()=>{ _lpFired=true; enterOrganize(); },600); return; }
+      _lpFired=false; el.classList.add('holding');
+      _lpTimer=setTimeout(()=>{ _lpFired=true; el.classList.remove('holding');
+        if(navigator.vibrate) navigator.vibrate(30); delBtn(ev,i); },600);
+    };
+    const cancel=()=>{ clearTimeout(_lpTimer); el.classList.remove('holding'); };
+    el.addEventListener('touchstart',start,{passive:true});
+    el.addEventListener('touchend',cancel); el.addEventListener('touchmove',cancel);
+    el.addEventListener('mousedown',start);
+    el.addEventListener('mouseup',cancel); el.addEventListener('mouseleave',cancel);
+  });
+  // In fullscreen, long-press on non-custom buttons also enters organize mode
+  if(_isFullscreen){
+    document.querySelectorAll('.snd:not(.custom):not(.add)').forEach(el=>{
+      const start=()=>{ _lpFired=false; _lpTimer=setTimeout(()=>{ _lpFired=true; enterOrganize(); },600); };
+      const cancel=()=>clearTimeout(_lpTimer);
+      el.addEventListener('touchstart',start,{passive:true}); el.addEventListener('touchend',cancel); el.addEventListener('touchmove',cancel);
+      el.addEventListener('mousedown',start); el.addEventListener('mouseup',cancel); el.addEventListener('mouseleave',cancel);
+    });
+  }
+}
+
 renderButtons();
 // ── Sent flyout: avatar card that floats up and fades away ───────────────────
 function showSentFly(avatarUrl, senderName, msgText, originEl){
