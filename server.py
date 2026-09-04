@@ -557,7 +557,7 @@ def _portal_page(error: str = "", ok: str = "") -> str:
 <div class="grain"></div>
 <div class="card">
   <div class="brand">
-    <div class="logo" style="background-image:url('/footer-avatar.png'),linear-gradient(135deg,var(--neon),var(--violet));background-size:82%,cover;background-position:center top,center;background-repeat:no-repeat;"></div>
+    <div class="logo" style="background-image:url('/footer-avatar.png');background-size:95%;background-position:center top;background-repeat:no-repeat;"></div>
     <div><h1>Link your PlayStation</h1>
       <p class="tag">One quick setup — then never again.</p></div>
   </div>
@@ -804,7 +804,7 @@ def _login_page(error: str = "", next: str = "/") -> str:
 </style></head>
 <body><div class="card">
   <div class="brand">
-    <div class="logo" style="background-image:url('/footer-avatar.png'),linear-gradient(135deg,var(--neon),var(--violet));background-size:82%,cover;background-position:center top,center;background-repeat:no-repeat;"></div>
+    <div class="logo" style="background-image:url('/footer-avatar.png');background-size:95%;background-position:center top;background-repeat:no-repeat;"></div>
     <div><h1>CRCMZ APP</h1><p class="sub">Yes. We have one.</p></div>
   </div>
   {err_html}
@@ -2746,11 +2746,8 @@ _DASHBOARD_TMPL = r"""<!doctype html>
   .announce b { font-size:13px; }
 
   .top { display:flex; align-items:center; gap:13px; padding:20px 2px 14px; }
-  .logo { width:60px; height:60px; border-radius:22px; flex:none; display:grid;
-    place-items:center; font-size:25px; overflow:hidden;
-    background:linear-gradient(135deg,var(--neon),var(--violet));
-    box-shadow:0 0 22px rgba(255,47,214,.6), 0 0 44px rgba(157,92,255,.35);
-    border:1px solid rgba(255,255,255,.15); }
+  .logo { width:60px; height:60px; flex:none; display:grid;
+    place-items:center; font-size:25px; overflow:hidden; }
   h1 { font-family:"Orbitron",sans-serif; font-size:21px; margin:0; font-weight:900;
     letter-spacing:1px; text-transform:uppercase;
     background:linear-gradient(90deg,var(--cyan),var(--neon));
@@ -3377,7 +3374,7 @@ _DASHBOARD_TMPL = r"""<!doctype html>
 <div class="announce empty" id="livecount"></div>
 <div class="wrap">
   <div class="top">
-    <div class="logo" style="background-image:url('/footer-avatar.png'),linear-gradient(135deg,var(--neon),var(--violet));background-size:82%,cover;background-position:center top,center;background-repeat:no-repeat;"></div>
+    <div class="logo" style="background-image:url('/footer-avatar.png');background-size:95%;background-position:center top;background-repeat:no-repeat;"></div>
     <div><h1>CRCMZ APP</h1><p class="tag">Yes. We have one.</p></div>
     <div style="margin-left:auto">
       <div style="position:relative">__USER__</div>
