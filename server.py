@@ -1107,8 +1107,11 @@ async def passkey_register_begin(request: Request):
             return JSONResponse({"error": "failed to initiate"}, status_code=500)
         d = r.json()
         passkey_id = d.get("passkeyId", "")
-        # Options are returned directly in the first call — no second /register step.
-        options = d.get("publicKeyCredentialCreationOptions")
+        # Zitadel wraps creation options as {"publicKey": {...}} — unwrap so the
+        # browser's navigator.credentials.create({publicKey: options}) gets the
+        # right shape directly.
+        wrapper = d.get("publicKeyCredentialCreationOptions") or {}
+        options = wrapper.get("publicKey") or wrapper
         if not options:
             return JSONResponse({"error": "no creation options returned"}, status_code=500)
         return JSONResponse({"passkeyId": passkey_id, "options": options})
