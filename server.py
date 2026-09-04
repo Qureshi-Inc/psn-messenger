@@ -670,7 +670,7 @@ _OPEN_PATHS = {"/portal/unlock", "/health"}
 
 # The only public hostname; anything else (bare IPs from the tailnet/LAN) is a
 # trusted direct hit and skips the gate.
-_PUBLIC_HOST = os.environ.get("PORTAL_PUBLIC_HOST", "psn.qureshi.io")
+_PUBLIC_HOST = os.environ.get("PORTAL_PUBLIC_HOST", "psn.crcmz.me")
 
 
 @app.middleware("http")
@@ -745,7 +745,7 @@ def portal_users(key: str = ""):
     return {"users": portal_mod.list_users()}
 
 
-# === Squad Dashboard (psn.qureshi.io home) ===
+# === Squad Dashboard (psn.crcmz.me home) ===
 #
 # Live view of everyone linked via the portal: who's online, what they're
 # playing, plus one-tap actions (Squad Up, Game Time, Roast) wired to the
@@ -900,6 +900,19 @@ def _send_to_wa(message_uid: str, video_bytes: bytes, sender: str, body: str = "
     """POST video bytes to slaptastic. Returns wa_message_id or None."""
     import base64
     import httpx as _httpx
+
+    # Guard: verify the bridge has an active WA connection before sending.
+    # The bridge returns {"status":"ok","whatsapp":true/false}. If whatsapp is
+    # false the bridge will accept the request and return 200 but never deliver —
+    # raise ClipError so the retry loop holds the job until the bridge recovers.
+    try:
+        health = _httpx.get(f"{WA_BRIDGE_URL}/health", timeout=5).json()
+        if not health.get("whatsapp"):
+            raise ClipError("WA bridge WhatsApp connection is down — will retry")
+    except ClipError:
+        raise
+    except Exception as e:
+        raise ClipError(f"WA bridge health check failed: {e}") from e
 
     # PSN auto-generates "X sent a video clip." — not a real user caption
     import re as _re
