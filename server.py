@@ -1434,6 +1434,27 @@ async def auth_logout():
     return resp
 
 
+@app.post("/api/psn/link")
+async def api_psn_link(request: Request):
+    """Link a PSN account via NPSSO token — JSON endpoint for the settings modal."""
+    session = _get_session(request)
+    if not session:
+        return JSONResponse({"error": "not authenticated"}, status_code=401)
+    body = await request.json()
+    npsso = (body.get("npsso") or "").strip()
+    if not npsso:
+        return JSONResponse({"error": "token is required"}, status_code=400)
+    zitadel_user_id = session.get("sub", "")
+    try:
+        result = portal_mod.link_user(npsso, zitadel_user_id=zitadel_user_id)
+    except portal_mod.LinkError as e:
+        return JSONResponse({"error": str(e)}, status_code=400)
+    except Exception as e:
+        logger.error("api/psn/link failed: %s", e)
+        return JSONResponse({"error": "Something went wrong. Try a fresh token."}, status_code=500)
+    return JSONResponse({"ok": True, "online_id": result.get("online_id", "")})
+
+
 @app.get("/portal", response_class=HTMLResponse)
 def portal_home(request: Request):
     return HTMLResponse(_portal_page())
@@ -2876,6 +2897,27 @@ _DASHBOARD_TMPL = r"""<!doctype html>
     color:#00dc78; display:block; }
   .smsg.err { background:rgba(255,60,60,.12); border:1px solid rgba(255,60,60,.4);
     color:#ff7070; display:block; }
+
+  /* PSN inline link flow */
+  .psn-steps { display:flex; align-items:center; gap:0; margin-bottom:18px; }
+  .psn-step-dot { width:28px; height:28px; border-radius:50%; flex:none; display:grid;
+    place-items:center; font-size:12px; font-weight:800; font-family:"Orbitron",sans-serif;
+    background:rgba(255,255,255,.07); border:1px solid rgba(255,255,255,.15); color:var(--dim);
+    transition:background .25s, color .25s, border-color .25s, box-shadow .25s; }
+  .psn-step-dot.active { background:linear-gradient(135deg,var(--cyan),var(--violet));
+    border-color:transparent; color:#fff; box-shadow:0 0 12px rgba(34,230,255,.5); }
+  .psn-step-dot.done { background:rgba(0,220,120,.2); border-color:rgba(0,220,120,.5);
+    color:#00dc78; }
+  .psn-step-line { flex:1; height:2px; background:rgba(255,255,255,.07); margin:0 4px; }
+  .psn-step-block { margin-bottom:14px; padding:14px; border-radius:14px;
+    border:1px solid rgba(255,255,255,.08); background:rgba(255,255,255,.025);
+    transition:opacity .25s, filter .25s; }
+  .psn-step-block.locked { opacity:.38; filter:grayscale(.4); pointer-events:none; }
+  .psn-step-label { font-weight:700; font-size:14px; margin-bottom:6px; color:var(--txt); }
+  .psn-step-hint { font-size:12.5px; color:var(--dim); line-height:1.55; }
+  .psn-token-preview { margin-top:10px; padding:9px 12px; border-radius:10px;
+    background:rgba(34,230,255,.07); border:1px solid rgba(34,230,255,.2);
+    font-size:12px; line-height:1.6; }
 </style></head>
 <body>
 
@@ -2921,11 +2963,59 @@ _DASHBOARD_TMPL = r"""<!doctype html>
     <div class="spanel" id="tab-psn">
       <div class="smodal-sect">
         <p class="smodal-sect-title">PlayStation account</p>
-        <div id="psnStatus" style="font-size:13.5px;color:var(--dim);margin-bottom:16px;line-height:1.6">
-          Loading…
+        <div id="psnStatus" style="font-size:13.5px;color:var(--dim);margin-bottom:16px;line-height:1.6">Loading…</div>
+      </div>
+
+      <!-- Inline link flow (shown when not linked, or expanded via re-link) -->
+      <div id="psnLinkFlow" style="display:none">
+        <!-- Step progress dots -->
+        <div class="psn-steps" id="psnSteps">
+          <div class="psn-step-dot active" id="psdot-1">1</div>
+          <div class="psn-step-line"></div>
+          <div class="psn-step-dot" id="psdot-2">2</div>
+          <div class="psn-step-line"></div>
+          <div class="psn-step-dot" id="psdot-3">3</div>
+        </div>
+
+        <!-- Step 1 -->
+        <div class="psn-step-block" id="psnS1">
+          <div class="psn-step-label">Sign in to PlayStation</div>
+          <div class="psn-step-hint">Open PlayStation.com and make sure you're logged into your account. If you already are, skip this.</div>
+          <a class="smodal-btn" href="https://www.playstation.com/" target="_blank" rel="noopener"
+             onclick="psnAdvance(2)" style="text-decoration:none;margin-top:10px;display:block">
+            Open PlayStation.com ↗
+          </a>
+          <button class="smodal-btn" style="background:none;border:1px solid rgba(255,255,255,.12);color:var(--dim);margin-top:8px" onclick="psnAdvance(2)">Already logged in — skip</button>
+        </div>
+
+        <!-- Step 2 -->
+        <div class="psn-step-block locked" id="psnS2">
+          <div class="psn-step-label">Get your token</div>
+          <div class="psn-step-hint">This link opens a Sony page. It looks like a blank page with a short code — that's your token. Copy everything you see.</div>
+          <div class="psn-token-preview"><span style="color:#9d8fc4">You'll see:</span> <code style="color:#22e6ff">{{"npsso":"AbCd1234..."}}</code></div>
+          <a class="smodal-btn" href="https://ca.account.sony.com/api/v1/ssocookie" target="_blank" rel="noopener"
+             onclick="psnAdvance(3)" style="text-decoration:none;margin-top:10px;display:block">
+            Open my token page ↗
+          </a>
+        </div>
+
+        <!-- Step 3 -->
+        <div class="psn-step-block locked" id="psnS3">
+          <div class="psn-step-label">Paste &amp; link</div>
+          <div class="psn-step-hint">Paste whatever the token page showed — the whole thing or just the token value, we'll figure it out.</div>
+          <textarea id="psnTokenInput" placeholder='{"npsso":"AbCd1234..."} — paste it all'
+            oninput="psnAdvance(3)" rows="3"
+            style="width:100%;margin-top:10px;padding:11px 13px;border-radius:12px;
+              border:1px solid rgba(34,230,255,.28);background:rgba(6,4,18,.8);
+              color:var(--txt);font-size:13px;font-family:ui-monospace,monospace;
+              resize:none;box-sizing:border-box;line-height:1.5"></textarea>
+          <button class="smodal-btn" style="background:none;border:1px solid rgba(255,255,255,.12);color:var(--dim);margin-top:6px" onclick="psnPasteClipboard()">📋 Paste from clipboard</button>
+          <div id="psnLinkMsg" class="smsg" style="display:none;margin-top:10px"></div>
+          <button class="smodal-btn" id="psnLinkBtn" onclick="linkPsn()" style="margin-top:8px">🔗 Link my account</button>
         </div>
       </div>
-      <a class="smodal-btn" href="/portal" style="text-decoration:none">🎮 Link / re-link PSN account</a>
+
+      <button id="psnRelinkBtn" class="smodal-btn" style="display:none;background:none;border:1px solid rgba(255,255,255,.12);color:var(--dim);margin-top:4px" onclick="togglePsnRelink()">Re-link PSN account</button>
     </div>
   </div>
 </div>
@@ -3425,10 +3515,17 @@ async function loadPsnStatus(){
         html += _adminUsersHtml(d.users);
       }
       el.innerHTML = html;
+      // Show re-link button, hide inline flow
+      const flow=$('psnLinkFlow'), relinkBtn=$('psnRelinkBtn');
+      if(flow) flow.style.display='none';
+      if(relinkBtn){ relinkBtn.style.display='block'; relinkBtn.textContent='Re-link PSN account'; }
       return;
     }
 
-    // ── Not yet claimed — show unclaimed list ─────────────────────────
+    // ── Not yet claimed — show inline link flow + unclaimed list ──────
+    const flow2=$('psnLinkFlow'), relinkBtn2=$('psnRelinkBtn');
+    if(flow2){ flow2.style.display='block'; _psnStep=1; psnAdvance(1); }
+    if(relinkBtn2) relinkBtn2.style.display='none';
     const unclaimed = d.unclaimed || [];
     let html = '';
     if(unclaimed.length){
@@ -3477,6 +3574,70 @@ function _adminUsersHtml(users){
         </span>
       </div>`;
     }).join('') + `</div>`;
+}
+
+// ── PSN inline link flow ─────────────────────────────────────────────────────
+let _psnStep = 1;
+function psnAdvance(n){
+  if(n > _psnStep) _psnStep = n;
+  // Mark completed dots
+  [1,2,3].forEach(i=>{
+    const dot=$('psdot-'+i);
+    if(!dot) return;
+    dot.classList.toggle('done', i < _psnStep);
+    dot.classList.toggle('active', i === _psnStep);
+  });
+  // Unlock steps up to current
+  const blocks=['psnS1','psnS2','psnS3'];
+  blocks.forEach((id,i)=>{
+    const el=$(id); if(!el) return;
+    el.classList.toggle('locked', i+1 > _psnStep);
+  });
+  // Scroll the next unlocked step into view
+  const next = $('psnS'+_psnStep);
+  if(next) setTimeout(()=>next.scrollIntoView({behavior:'smooth',block:'nearest'}),80);
+}
+function togglePsnRelink(){
+  const flow=$('psnLinkFlow'), btn=$('psnRelinkBtn');
+  const showing = flow.style.display!=='none';
+  flow.style.display = showing ? 'none' : 'block';
+  btn.textContent = showing ? 'Re-link PSN account' : 'Cancel';
+  if(!showing){ _psnStep=1; psnAdvance(1); }
+}
+async function psnPasteClipboard(){
+  try {
+    const t = await navigator.clipboard.readText();
+    if(t){ $('psnTokenInput').value=t.trim(); psnAdvance(3); }
+  } catch(e){ $('psnTokenInput').focus(); }
+}
+async function linkPsn(){
+  const token = ($('psnTokenInput').value||'').trim();
+  if(!token) return;
+  const btn=$('psnLinkBtn'), msg=$('psnLinkMsg');
+  btn.disabled=true; btn.textContent='Linking…';
+  msg.className='smsg'; msg.style.display='none';
+  try {
+    const r = await fetch('/api/psn/link',{method:'POST',
+      headers:{'Content-Type':'application/json'},
+      body:JSON.stringify({npsso:token})});
+    const d = await r.json();
+    if(r.ok){
+      msg.className='smsg ok'; msg.style.display='block';
+      msg.textContent = '✓ Linked as '+d.online_id+'! Your messages now appear from your PSN account.';
+      btn.style.display='none';
+      $('psnLinkFlow').style.display='none';
+      $('psnRelinkBtn').style.display='none';
+      setTimeout(loadPsnStatus, 400);
+    } else {
+      msg.className='smsg err'; msg.style.display='block';
+      msg.textContent = d.error || 'Link failed — try a fresh token.';
+      btn.disabled=false; btn.textContent='🔗 Link my account';
+    }
+  } catch(e){
+    msg.className='smsg err'; msg.style.display='block';
+    msg.textContent='Network error — try again.';
+    btn.disabled=false; btn.textContent='🔗 Link my account';
+  }
 }
 
 async function claimPsn(key, name){
