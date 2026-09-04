@@ -120,11 +120,19 @@ def health():
 
 
 _FAVICON_PATH = Path(__file__).parent / "favicon.png"
+_LOGO_PATH    = Path(__file__).parent / "crcmz-logo.png"
 
 @app.get("/favicon.png", include_in_schema=False)
 def favicon():
     if _FAVICON_PATH.exists():
         return Response(_FAVICON_PATH.read_bytes(), media_type="image/png",
+                        headers={"Cache-Control": "public, max-age=86400"})
+    return Response(status_code=404)
+
+@app.get("/crcmz-logo.png", include_in_schema=False)
+def crcmz_logo():
+    if _LOGO_PATH.exists():
+        return Response(_LOGO_PATH.read_bytes(), media_type="image/png",
                         headers={"Cache-Control": "public, max-age=86400"})
     return Response(status_code=404)
 
@@ -541,7 +549,7 @@ def _portal_page(error: str = "", ok: str = "") -> str:
 <div class="grain"></div>
 <div class="card">
   <div class="brand">
-    <div class="logo">🎮</div>
+    <img src="/crcmz-logo.png" class="logo" alt="CRCMZ" style="object-fit:contain;border-radius:14px;">
     <div><h1>Link your PlayStation</h1>
       <p class="tag">One quick setup — then never again.</p></div>
   </div>
@@ -719,7 +727,7 @@ def _login_page(error: str = "", next: str = "/") -> str:
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
 <link rel="icon" type="image/png" href="/favicon.png">
-<title>Sign in · PS HQ</title>
+<title>Sign in · CRCMZ APP</title>
 <style>
   :root {{ color-scheme:dark; }}
   * {{ box-sizing:border-box; -webkit-tap-highlight-color:transparent; }}
@@ -788,8 +796,8 @@ def _login_page(error: str = "", next: str = "/") -> str:
 </style></head>
 <body><div class="card">
   <div class="brand">
-    <div class="logo">🎮</div>
-    <div><h1>PS HQ</h1><p class="sub">Members only</p></div>
+    <img src="/crcmz-logo.png" class="logo" alt="CRCMZ" style="object-fit:contain;border-radius:14px;">
+    <div><h1>CRCMZ APP</h1><p class="sub">Yes. We have one.</p></div>
   </div>
   {err_html}
   <form method="post" action="/auth/login?next={safe_next}" id="f">
@@ -2680,7 +2688,7 @@ _DASHBOARD_TMPL = r"""<!doctype html>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
 <link rel="icon" type="image/png" href="/favicon.png">
-<title>PS HQ · PSN</title>
+<title>CRCMZ APP · PSN</title>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Orbitron:wght@600;800;900&family=Rajdhani:wght@500;600;700&display=swap" rel="stylesheet">
@@ -3276,8 +3284,8 @@ _DASHBOARD_TMPL = r"""<!doctype html>
 
 <div class="wrap">
   <div class="top">
-    <div class="logo">🎮</div>
-    <div><h1>PS HQ</h1><p class="tag">PSN · Live</p></div>
+    <img src="/crcmz-logo.png" class="logo" alt="CRCMZ" style="object-fit:contain;border-radius:13px;">
+    <div><h1>CRCMZ APP</h1><p class="tag">Yes. We have one.</p></div>
     <div style="margin-left:auto;display:flex;align-items:center;gap:10px">
       <div class="live" id="livecount"></div>
       <div style="position:relative">__USER__</div>
