@@ -2874,7 +2874,7 @@ async function sendQuick(){
   if(!msg) return;
   btn.disabled = true;
   try {
-    const r = await fetch('/v2/squad',{method:'POST',headers:{'Content-Type':'application/json'},
+    const r = await fetch('/v2/send',{method:'POST',headers:{'Content-Type':'application/json'},
       body:JSON.stringify({message:msg})});
     if(r.ok){ inp.value=''; toast('Sent! 🎮'); }
     else if(r.status===429){ toast('Slow down a sec ⏳'); }
