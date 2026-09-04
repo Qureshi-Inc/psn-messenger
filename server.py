@@ -557,7 +557,7 @@ def _portal_page(error: str = "", ok: str = "") -> str:
 <div class="grain"></div>
 <div class="card">
   <div class="brand">
-    <div class="logo" style="background-image:url('/footer-avatar.png');background-size:95%;background-position:center top;background-repeat:no-repeat;"></div>
+    <div class="logo" style="background-image:url('/footer-avatar.png');background-size:90%;background-position:center center;background-repeat:no-repeat;"></div>
     <div><h1>Link your PlayStation</h1>
       <p class="tag">One quick setup — then never again.</p></div>
   </div>
@@ -804,7 +804,7 @@ def _login_page(error: str = "", next: str = "/") -> str:
 </style></head>
 <body><div class="card">
   <div class="brand">
-    <div class="logo" style="background-image:url('/footer-avatar.png');background-size:95%;background-position:center top;background-repeat:no-repeat;"></div>
+    <div class="logo" style="background-image:url('/footer-avatar.png');background-size:90%;background-position:center center;background-repeat:no-repeat;"></div>
     <div><h1>CRCMZ APP</h1><p class="sub">Yes. We have one.</p></div>
   </div>
   {err_html}
@@ -3374,7 +3374,7 @@ _DASHBOARD_TMPL = r"""<!doctype html>
 <div class="announce empty" id="livecount"></div>
 <div class="wrap">
   <div class="top">
-    <div class="logo" style="background-image:url('/footer-avatar.png');background-size:95%;background-position:center top;background-repeat:no-repeat;"></div>
+    <div class="logo" style="background-image:url('/footer-avatar.png');background-size:90%;background-position:center center;background-repeat:no-repeat;"></div>
     <div><h1>CRCMZ APP</h1><p class="tag">Yes. We have one.</p></div>
     <div style="margin-left:auto">
       <div style="position:relative">__USER__</div>
