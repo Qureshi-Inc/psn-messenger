@@ -12,6 +12,7 @@ import calendar
 import hashlib
 import io
 import logging
+import os
 import re
 import sqlite3
 import threading
@@ -29,6 +30,35 @@ _DB_PATH = Path("/data/whatsapp.db")
 _lock = threading.Lock()
 _TZ = ZoneInfo("America/Los_Angeles")
 
+
+def _load_aliases() -> dict[str, str]:
+    """Parse WA_NAME_ALIASES env var.
+
+    Format: comma-separated ``old:new`` pairs, e.g.
+    ``@interestingsoup:Moiz,oldname:NewName``
+    Matching is case-insensitive; stored names are replaced with the canonical value.
+    """
+    raw = os.environ.get("WA_NAME_ALIASES", "").strip()
+    result: dict[str, str] = {}
+    if not raw:
+        return result
+    for pair in raw.split(","):
+        pair = pair.strip()
+        if ":" not in pair:
+            continue
+        old, _, new = pair.partition(":")
+        old, new = old.strip(), new.strip()
+        if old and new:
+            result[old.lower()] = new
+    return result
+
+
+_NAME_ALIASES: dict[str, str] = {}
+
+
+def _resolve_name(name: str) -> str:
+    return _NAME_ALIASES.get(name.lower(), name)
+
 MAX_UPLOAD_BYTES = 50 * 1024 * 1024
 MAX_ZIP_UNCOMPRESSED = 150 * 1024 * 1024
 MAX_ZIP_FILES = 10
@@ -43,6 +73,8 @@ def _conn() -> sqlite3.Connection:
 
 
 def init() -> None:
+    global _NAME_ALIASES
+    _NAME_ALIASES = _load_aliases()
     _DB_PATH.parent.mkdir(parents=True, exist_ok=True)
     with _lock, _conn() as db:
         db.executescript("""
@@ -90,6 +122,21 @@ def init() -> None:
             imported_by_sub TEXT NOT NULL
         );
         """)
+    # Patch existing records for any configured name aliases
+    if _NAME_ALIASES:
+        with _lock, _conn() as db:
+            for old_lower, new_name in _NAME_ALIASES.items():
+                db.execute(
+                    "UPDATE whatsapp_messages SET sender_name=? "
+                    "WHERE lower(sender_name)=? AND sender_name!=?",
+                    (new_name, old_lower, new_name),
+                )
+                db.execute(
+                    "UPDATE whatsapp_reactions SET reactor_name=? "
+                    "WHERE lower(reactor_name)=? AND reactor_name!=?",
+                    (new_name, old_lower, new_name),
+                )
+            db.commit()
     logger.info("whatsapp_analytics: DB ready at %s", _DB_PATH)
 
 
@@ -196,7 +243,7 @@ def parse_txt(text: str) -> list[dict]:
             is_media = bool(_MEDIA_RE.search(body)) if body else False
             bl = body.lower()
             current = {
-                "sender_name": sender,
+                "sender_name": _resolve_name(sender),
                 "timestamp": ts,
                 "text": None if is_media else (body or None),
                 "is_media_omitted": is_media,
@@ -319,8 +366,10 @@ def ingest_baileys_message(msg: dict) -> bool:
     """Store a single Baileys message. Returns True if newly inserted."""
     message_id = msg.get("message_id") or msg.get("id") or ""
     sender_jid = msg.get("sender_jid") or msg.get("from") or ""
-    sender_name = (msg.get("sender_name") or msg.get("pushName") or
-                   (sender_jid.split("@")[0] if sender_jid else "") or "Unknown")
+    sender_name = _resolve_name(
+        msg.get("sender_name") or msg.get("pushName") or
+        (sender_jid.split("@")[0] if sender_jid else "") or "Unknown"
+    )
     group_jid = msg.get("group_jid") or msg.get("groupJid") or ""
     ts = msg.get("timestamp") or msg.get("messageTimestamp") or int(time.time())
     ts = int(ts)
@@ -365,7 +414,7 @@ def ingest_baileys_reaction(reaction: dict) -> bool:
     """Store a reaction from Baileys."""
     target = reaction.get("target_msg_id") or reaction.get("id") or ""
     reactor_jid = reaction.get("reactor_jid") or reaction.get("from") or ""
-    reactor_name = reaction.get("reactor_name") or reactor_jid.split("@")[0] or ""
+    reactor_name = _resolve_name(reaction.get("reactor_name") or reactor_jid.split("@")[0] or "")
     emoji = reaction.get("emoji") or reaction.get("text") or ""
     if not emoji or not target:
         return False

@@ -22,6 +22,7 @@ services:
       - SESSION_SECRET=${SESSION_SECRET:-}
       - WHATSAPP_IMPORT_ALLOWED_ROLE=${WHATSAPP_IMPORT_ALLOWED_ROLE:-IAM Owner Viewer}
       - WA_INGEST_SECRET=${WA_INGEST_SECRET:-}
+      - WA_NAME_ALIASES=${WA_NAME_ALIASES:-}
     extra_hosts:
       - "host.docker.internal:host-gateway"
     ports:

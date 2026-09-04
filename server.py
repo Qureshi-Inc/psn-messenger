@@ -635,6 +635,7 @@ SESSION_SECRET        = os.environ.get("SESSION_SECRET", "")
 # WhatsApp import authorization — BOTH conditions must hold
 WHATSAPP_IMPORT_ALLOWED_ROLE = os.environ.get("WHATSAPP_IMPORT_ALLOWED_ROLE", "IAM Owner Viewer")
 WA_INGEST_SECRET             = os.environ.get("WA_INGEST_SECRET", "")
+WA_NAME_ALIASES              = os.environ.get("WA_NAME_ALIASES", "")
 
 _SESSION_COOKIE    = "psn_session"
 _OIDC_STATE_COOKIE = "psn_oidc_state"
