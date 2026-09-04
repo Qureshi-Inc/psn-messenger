@@ -3073,6 +3073,8 @@ _DASHBOARD_TMPL = r"""<!doctype html>
   .wa-bar-track { flex:1; height:6px; background:rgba(255,255,255,.06); border-radius:3px; overflow:hidden; }
   .wa-bar-fill { height:100%; border-radius:3px; background:linear-gradient(90deg,var(--cyan),var(--neon)); }
   .wa-bar-val { font-size:11px; color:var(--dim); flex-shrink:0; min-width:36px; text-align:right; }
+  .wa-word-grid { display:grid; grid-template-columns:1fr 1fr; gap:8px; margin-bottom:8px; }
+  @media(max-width:600px){ .wa-word-grid { grid-template-columns:1fr; } }
 
   .user-btn { width:38px; height:38px; border-radius:50%;
     border:1.5px solid rgba(255,47,214,.7);
@@ -4781,7 +4783,7 @@ async function loadWa(){
 
       html += `<div class="pip-section">
   <p class="pip-title">📝 Word Analysis</p>
-  <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-bottom:8px">
+  <div class="wa-word-grid">
     <div class="card" style="padding:8px 12px">${wRows}</div>
     <div class="card" style="padding:12px 14px;line-height:1.9"><div class="wa-cloud">${cloud}</div></div>
   </div>
