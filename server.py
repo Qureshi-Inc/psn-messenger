@@ -2735,8 +2735,8 @@ _DASHBOARD_TMPL = r"""<!doctype html>
   .wrap { max-width:760px; margin:0 auto; padding:0 14px; }
 
   .top { display:flex; align-items:center; gap:13px; padding:20px 2px 14px; }
-  .logo { width:48px; height:48px; border-radius:13px; flex:none; display:grid;
-    place-items:center; font-size:25px;
+  .logo { width:60px; height:60px; border-radius:14px; flex:none; display:grid;
+    place-items:center; font-size:25px; overflow:hidden;
     background:linear-gradient(135deg,var(--neon),var(--violet));
     box-shadow:0 0 22px rgba(255,47,214,.6), 0 0 44px rgba(157,92,255,.35);
     border:1px solid rgba(255,255,255,.15); }
@@ -2747,10 +2747,11 @@ _DASHBOARD_TMPL = r"""<!doctype html>
     text-shadow:0 0 18px rgba(255,47,214,.35); }
   .tag { color:var(--dim); font-size:12px; margin:3px 0 0; letter-spacing:1px;
     text-transform:uppercase; }
-  .top .live { margin-left:auto; text-align:right; font-size:12px; color:var(--dim);
+  .top .live { display:none; }
+  .live { font-size:12px; color:var(--dim);
     text-transform:uppercase; letter-spacing:.5px; }
-  .top .live b { color:var(--lime); font-size:16px; font-family:"Orbitron",sans-serif;
-    text-shadow:0 0 12px rgba(140,255,43,.6); }
+  .live b { color:var(--lime); font-size:14px; font-family:"Orbitron",sans-serif;
+    text-shadow:0 0 10px rgba(140,255,43,.5); }
 
   /* ── Chat Board (sticky bottom) ── */
   .board-wrap { position:fixed; left:0; right:0; bottom:0; z-index:30;
@@ -3369,10 +3370,9 @@ _DASHBOARD_TMPL = r"""<!doctype html>
 
 <div class="wrap">
   <div class="top">
-    <img src="/footer-avatar.png" class="logo" alt="CRCMZ" style="object-fit:contain;border-radius:13px;">
+    <img src="/footer-avatar.png" class="logo" alt="CRCMZ" style="object-fit:cover;object-position:top center;width:60px;height:60px;border-radius:14px;">
     <div><h1>CRCMZ APP</h1><p class="tag">Yes. We have one.</p></div>
-    <div style="margin-left:auto;display:flex;align-items:center;gap:10px">
-      <div class="live" id="livecount"></div>
+    <div style="margin-left:auto">
       <div style="position:relative">__USER__</div>
     </div>
   </div>
@@ -3404,6 +3404,7 @@ _DASHBOARD_TMPL = r"""<!doctype html>
       </div>
       <div class="hype-track"><div class="hype-fill dead" id="hypeFill"></div></div>
     </div>
+    <div class="live" id="livecount" style="margin-bottom:8px"></div>
     <div class="statgrid" id="statgrid"></div>
     <div class="card" id="squad"><div class="spin">Loading squad…</div></div>
     <p class="pip-title" style="margin:18px 0 8px">🏆 Ranks</p>
