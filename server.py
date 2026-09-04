@@ -197,12 +197,12 @@ def v2_send_message(req: MessageRequest, request: Request):
             if session:
                 user_token = portal_mod.get_fresh_access_token(session.get("sub", ""))
                 if user_token:
-                    user_messenger = PSNMessenger(_DirectAuth(user_token), GROUP_ID)
+                    user_messenger = PSNMessenger(_DirectAuth(user_token), SQUAD_GROUP_ID)
                     success = user_messenger.send_message(req.message.strip())
         except Exception as ue:
             logger.warning("v2: user-token send failed (%s), falling back to server account", ue)
         if not success:
-            success = psn_messenger.send_message(req.message.strip())
+            success = _squad_messenger.send_message(req.message.strip())
         if success:
             return {"status": "sent", "message": req.message.strip(), "version": "v2"}
         raise HTTPException(status_code=500, detail="Failed to send message")
