@@ -2284,7 +2284,7 @@ def api_clip_resend(message_uid: str):
 
 
 _hype_cache: dict = {}
-_HYPE_MAX = 20  # messages = 100%
+_HYPE_MAX = 150  # messages = 100%
 
 @app.get("/api/hype")
 def api_hype():
@@ -2296,7 +2296,7 @@ def api_hype():
     if _hype_cache.get("ts", 0) > now - 60:
         return _hype_cache["data"]
     try:
-        msgs = _squad_messenger.get_messages(100)
+        msgs = _squad_messenger.get_messages(200)
         import datetime as _dt
         today = _dt.datetime.now(_dt.timezone.utc).date()
         count = 0
@@ -2322,13 +2322,13 @@ def api_hype():
         pct = min(100, round(count / _HYPE_MAX * 100))
         if count == 0:
             label, level = "☠️ DEAD SILENT", "dead"
-        elif count < 4:
-            label, level = "❄️ COLD", "cold"
-        elif count < 9:
-            label, level = "🌡️ WARMING UP", "warm"
         elif count < 15:
+            label, level = "❄️ COLD", "cold"
+        elif count < 40:
+            label, level = "🌡️ WARMING UP", "warm"
+        elif count < 80:
             label, level = "🔥 HOT", "hot"
-        elif count < 20:
+        elif count < 120:
             label, level = "🔥🔥 ON FIRE", "fire"
         else:
             label, level = "💥 HYPE OVERLOAD", "overload"
