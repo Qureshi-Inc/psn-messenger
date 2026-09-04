@@ -331,6 +331,78 @@ def find_by_zitadel_id(zitadel_user_id: str) -> dict | None:
     return None
 
 
+_REFRESH_BUFFER = 300  # refresh 5 min before expiry
+
+
+def get_fresh_access_token(zitadel_user_id: str) -> str | None:
+    """Return a valid PSN access token for the given Zitadel user.
+
+    Reads the stored record, refreshes via refresh_token if the access token
+    is near expiry, writes updated tokens back to disk, and returns the token.
+    Returns None if the user has no PSN record, no valid refresh token, or any
+    network error prevents refresh.
+    """
+    if not zitadel_user_id or not USERS_DIR.exists():
+        return None
+    record_file: Path | None = None
+    record: dict | None = None
+    for f in USERS_DIR.glob("*.json"):
+        try:
+            d = json.loads(f.read_text())
+        except Exception:  # noqa: BLE001
+            continue
+        if d.get("zitadel_user_id") == zitadel_user_id:
+            record_file, record = f, d
+            break
+    if record is None or record_file is None:
+        return None
+
+    now = time.time()
+    access_token = record.get("access_token")
+    expires_at = record.get("expires_at", 0)
+    refresh_token = record.get("refresh_token")
+    refresh_expires_at = record.get("refresh_expires_at", 0)
+
+    # Token still fresh — return it directly.
+    if access_token and now < expires_at - _REFRESH_BUFFER:
+        return access_token
+
+    # Try refresh token.
+    if not refresh_token or now >= refresh_expires_at:
+        logger.warning("portal: user %s has no valid refresh token", zitadel_user_id)
+        return None
+
+    try:
+        with httpx.Client(timeout=15) as client:
+            resp = client.post(
+                TOKEN_URL,
+                data={
+                    "grant_type": "refresh_token",
+                    "refresh_token": refresh_token,
+                    "scope": SCOPE,
+                    "token_format": "jwt",
+                },
+                headers={
+                    "Content-Type": "application/x-www-form-urlencoded",
+                    "Authorization": AUTH_HEADER,
+                },
+            )
+        if resp.status_code != 200:
+            logger.warning("portal: token refresh failed for %s: %d", zitadel_user_id, resp.status_code)
+            return None
+        data = resp.json()
+        record["access_token"] = data["access_token"]
+        record["refresh_token"] = data.get("refresh_token", refresh_token)
+        record["expires_at"] = now + data.get("expires_in", 3600)
+        record["refresh_expires_at"] = now + data.get("refresh_token_expires_in", 7776000)
+        record_file.write_text(json.dumps(record, indent=2))
+        logger.info("portal: refreshed token for zitadel_user_id=%s", zitadel_user_id)
+        return record["access_token"]
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("portal: token refresh error for %s: %s", zitadel_user_id, exc)
+        return None
+
+
 def mattermost_usernames() -> list[str]:
     """Fetch active team members' usernames for the portal dropdown.
 

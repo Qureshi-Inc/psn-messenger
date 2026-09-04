@@ -91,6 +91,17 @@ def _rate_limit(key: str, actor: str = "") -> None:
 import re as _re
 
 
+class _DirectAuth:
+    """Minimal duck-type of PSNAuth that holds a pre-fetched access token.
+    PSNMessenger only reads auth.access_token, so this is all we need.
+    """
+    def __init__(self, token: str):
+        self._token = token
+
+    @property
+    def access_token(self) -> str:
+        return self._token
+
 
 class MessageRequest(BaseModel):
     message: str
@@ -178,7 +189,17 @@ def v2_send_message(req: MessageRequest, request: Request):
     if not req.message.strip():
         raise HTTPException(status_code=400, detail="Message cannot be empty")
     try:
-        success = psn_messenger.send_message(req.message.strip())
+        # Send as the logged-in user's PSN account if they have one linked.
+        # Falls back to the server (crcmz-mod) account transparently.
+        session = _get_session(request)
+        user_token = None
+        if session:
+            user_token = portal_mod.get_fresh_access_token(session.get("sub", ""))
+        if user_token:
+            user_messenger = PSNMessenger(_DirectAuth(user_token), GROUP_ID)
+            success = user_messenger.send_message(req.message.strip())
+        else:
+            success = psn_messenger.send_message(req.message.strip())
         if success:
             return {"status": "sent", "message": req.message.strip(), "version": "v2"}
         raise HTTPException(status_code=500, detail="Failed to send message")
