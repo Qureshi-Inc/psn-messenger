@@ -557,7 +557,7 @@ def _portal_page(error: str = "", ok: str = "") -> str:
 <div class="grain"></div>
 <div class="card">
   <div class="brand">
-    <img src="/footer-avatar.png" class="logo" alt="CRCMZ" style="object-fit:cover;border-radius:50%;">
+    <div class="logo"><img src="/footer-avatar.png" alt="CRCMZ" style="width:100%;height:100%;object-fit:cover;object-position:top center;display:block;"></div>
     <div><h1>Link your PlayStation</h1>
       <p class="tag">One quick setup — then never again.</p></div>
   </div>
@@ -804,7 +804,7 @@ def _login_page(error: str = "", next: str = "/") -> str:
 </style></head>
 <body><div class="card">
   <div class="brand">
-    <img src="/footer-avatar.png" class="logo" alt="CRCMZ" style="object-fit:cover;border-radius:50%;">
+    <div class="logo"><img src="/footer-avatar.png" alt="CRCMZ" style="width:100%;height:100%;object-fit:cover;object-position:top center;display:block;"></div>
     <div><h1>CRCMZ APP</h1><p class="sub">Yes. We have one.</p></div>
   </div>
   {err_html}
@@ -3370,7 +3370,7 @@ _DASHBOARD_TMPL = r"""<!doctype html>
 
 <div class="wrap">
   <div class="top">
-    <img src="/footer-avatar.png" class="logo" alt="CRCMZ" style="object-fit:cover;object-position:top center;width:60px;height:60px;border-radius:14px;">
+    <div class="logo"><img src="/footer-avatar.png" alt="CRCMZ" style="width:100%;height:100%;object-fit:cover;object-position:top center;display:block;"></div>
     <div><h1>CRCMZ APP</h1><p class="tag">Yes. We have one.</p></div>
     <div style="margin-left:auto">
       <div style="position:relative">__USER__</div>
