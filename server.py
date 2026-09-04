@@ -3094,6 +3094,7 @@ _DASHBOARD_TMPL = r"""<!doctype html>
   <div class="panel" id="p-slap">
     <div id="slap-stats" class="statgrid" style="margin-bottom:10px"></div>
     <div id="slap-vibe" class="card" style="display:none;margin-bottom:10px;padding:12px 16px;font-size:13px;color:var(--dim);font-style:italic;text-align:center"></div>
+    <div id="slap-digest" class="card" style="display:none;margin-bottom:10px;padding:10px 14px;font-size:13px;color:var(--dim)"></div>
     <div id="slap-inner"><div class="spin">Loading Slapshare…</div></div>
   </div>
 </div>
@@ -3569,101 +3570,379 @@ ${(d.clips||[]).length ? `<div class="pip-section">
 loadPipeline();
 setInterval(loadPipeline, 30000);
 
-// ── Slapshare music stats ─────────────────────────────────────────────────────
+// ── Slapshare full dashboard ──────────────────────────────────────────────────
 const SLAP_BASE = 'https://slap.qureshi.io/api/v1/dashboard';
 let _slapLoaded = false;
+const SLAP_NAMES = {moiz:'moiz',themoosecompany:'moose',shahraiz:'shahraiz',
+  zubair221b:'zubair',nooramin40:'noor',deception:'deception',asamad89:'asamad'};
+function slapName(u){ return SLAP_NAMES[u]||u; }
+function slapAgo(d){
+  if(!d) return '';
+  const s=Math.floor((Date.now()-new Date(d))/1000);
+  if(s<60) return 'just now';
+  if(s<3600) return Math.floor(s/60)+'m ago';
+  if(s<86400) return Math.floor(s/3600)+'h ago';
+  return Math.floor(s/86400)+'d ago';
+}
+function slapPlat(p){ return {spotify:'💚',apple_music:'🍎',youtube:'▶️'}[p]||'🎵'; }
 
-// Map slaptastic usernames → display names for the PS HQ context
-const SLAP_NAMES = {
-  moiz:'moiz', themoosecompany:'moose', shahraiz:'shahraiz',
-  zubair221b:'zubair', nooramin40:'noor', deception:'deception', asamad89:'asamad'
-};
-function slapName(u){ return SLAP_NAMES[u] || u; }
-
-async function loadSlap() {
-  if (_slapLoaded) return;  // lazy: only fetch once per page load; refresh is manual
+async function loadSlap(){
+  if(_slapLoaded) return;
   _slapLoaded = true;
   try {
-    const [statsR, lbR, recentR, hotR] = await Promise.all([
+    const [statsR,lbR,recentR,hotR,genreR,tlR,artR,achR,hipR,strR,perR,hofR,hmR] = await Promise.all([
       fetch(SLAP_BASE+'/stats').then(r=>r.json()),
       fetch(SLAP_BASE+'/leaderboard').then(r=>r.json()),
-      fetch(SLAP_BASE+'/recent?limit=8').then(r=>r.json()),
+      fetch(SLAP_BASE+'/recent?limit=30').then(r=>r.json()),
       fetch(SLAP_BASE+'/hot').then(r=>r.json()),
+      fetch(SLAP_BASE+'/genres').then(r=>r.json()),
+      fetch(SLAP_BASE+'/timeline').then(r=>r.json()),
+      fetch(SLAP_BASE+'/artists?limit=10').then(r=>r.json()),
+      fetch(SLAP_BASE+'/achievements').then(r=>r.json()),
+      fetch(SLAP_BASE+'/hipster').then(r=>r.json()),
+      fetch(SLAP_BASE+'/streaks').then(r=>r.json()),
+      fetch(SLAP_BASE+'/personalities').then(r=>r.json()),
+      fetch(SLAP_BASE+'/hall-of-fame').then(r=>r.json()),
+      fetch(SLAP_BASE+'/heatmap').then(r=>r.json()),
     ]);
 
+    const stats      = statsR||{};
+    const lb         = lbR.entries||[];
+    const recent     = (recentR.items||[]).slice(0,30);
+    const hot        = (hotR.items||hotR.hot||[]).slice(0,6);
+    const genres     = (genreR.genres||[]).slice(0,8);
+    const timeline   = (tlR.entries||[]).slice(-20);
+    const artists    = (artR.artists||[]).slice(0,10);
+    const achieves   = achR.achievements||[];
+    const hipsters   = hipR.entries||[];
+    const streaks    = strR.entries||[];
+    const persons    = perR.cards||[];
+    const hof        = hofR.entries||[];
+    const heatmap    = hmR||{};
+
     // Stats bar
-    const stats = statsR || {};
+    const topLb = lb[0];
     $('slap-stats').innerHTML =
-      '<div class="stile"><div class="sv">'+(stats.total_songs??'—')+'</div><div class="sl">🎵 Total Tracks</div></div>'+
-      '<div class="stile"><div class="sv">'+(stats.total_contributors??'—')+'</div><div class="sl">👥 Contributors</div></div>'+
-      '<div class="stile"><div class="sv" style="font-size:12px">'+(stats.top_artist?esc(stats.top_artist).slice(0,14):'—')+'</div><div class="sl">🎤 Top Artist</div></div>';
+      `<div class="stile"><div class="sv">${stats.total_songs??'—'}</div><div class="sl">🎵 Tracks</div></div>`+
+      `<div class="stile"><div class="sv">${stats.total_contributors??'—'}</div><div class="sl">👥 Squad</div></div>`+
+      `<div class="stile"><div class="sv" style="font-size:11px">${stats.top_artist?esc(stats.top_artist).slice(0,12):'—'}</div><div class="sl">🎤 Top Artist</div></div>`+
+      `<div class="stile"><div class="sv">${stats.this_week_additions??'—'}</div><div class="sl">📅 This Week</div></div>`;
 
-    // Leaderboard
-    const lb = (lbR.entries||[]).slice(0,7);
-    const lbHtml = lb.length ? lb.map((e,i)=>{
-      const medal = i<3?['🥇','🥈','🥉'][i]:'#'+(i+1);
-      const bar = lb[0].song_count ? Math.round((e.song_count/lb[0].song_count)*100) : 0;
+    let html = '';
+
+    // 1. The Throne
+    if(topLb){
+      html += `<div class="pip-section">
+  <p class="pip-title" style="text-align:center">👑 The Throne</p>
+  <div class="card" style="text-align:center;padding:18px 12px">
+    <div style="font-size:36px;margin-bottom:6px">👑</div>
+    <div style="font-family:'Orbitron',sans-serif;font-size:20px;color:${topLb.color||'var(--gold)'};">${esc(slapName(topLb.username))}</div>
+    <div style="font-size:30px;font-family:'Orbitron',sans-serif;color:var(--gold);margin:4px 0">${topLb.song_count}</div>
+    <div style="font-size:11px;color:var(--dim)">slaps — reigning champion</div>
+  </div>
+</div>`;
+    }
+
+    // 2. Hot Right Now
+    if(hot.length){
+      const hotCards = hot.map(t=>`<div style="flex-shrink:0;width:170px;background:rgba(255,115,22,.07);border:1px solid rgba(255,115,22,.3);border-radius:12px;padding:12px">
+      <div style="font-size:20px;margin-bottom:6px">🎵</div>
+      <div style="font-size:13px;font-weight:600;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${esc((t.title||'').slice(0,22))}</div>
+      <div style="font-size:11px;color:var(--dim);overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${esc(t.artist||'')}</div>
+      <div style="margin-top:6px;font-size:10px;color:var(--gold)">${esc(slapName(t.username||''))}</div>
+      <div style="font-size:9px;color:var(--dim)">${slapAgo(t.created_at)}</div>
+    </div>`).join('');
+      html += `<div class="pip-section">
+  <p class="pip-title">🔥 Hot Right Now <span style="font-size:10px;color:var(--dim)">last 24h</span></p>
+  <div style="display:flex;gap:10px;overflow-x:auto;padding-bottom:6px">${hotCards}</div>
+</div>`;
+    }
+
+    // 3. Full Leaderboard
+    const lbRows = lb.length ? lb.map((e,i)=>{
+      const medal = i===0?'👑':i===1?'🥈':i===2?'🥉':'#'+(i+1);
+      const bar = lb[0].song_count?Math.round((e.song_count/lb[0].song_count)*100):0;
       return `<div class="lb-row">
-        <div class="rank">${medal}</div>
-        <div class="who" style="flex:1">
-          <div class="name">${esc(slapName(e.username))}</div>
-          <div class="bar"><i style="width:${bar}%;background:linear-gradient(90deg,var(--neon),var(--violet))"></i></div>
-        </div>
-        <div style="font-family:'Orbitron',sans-serif;font-size:13px;color:var(--cyan);min-width:32px;text-align:right">${e.song_count}</div>
-      </div>`;
-    }).join('') : '<div class="empty">No leaderboard data</div>';
-
-    // Hot right now
-    const hot = (hotR.items||hotR.hot||[]).slice(0,5);
-    const hotHtml = hot.length ? hot.map((t,i)=>
-      `<div class="svc-row" style="padding:8px 4px;border-bottom:1px solid rgba(255,255,255,.04)">
-        <span style="font-family:'Orbitron',sans-serif;font-size:11px;color:var(--gold);min-width:20px">#${i+1}</span>
-        <span style="flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${esc((t.title||t.name||'').slice(0,36))}</span>
-        <span style="font-size:11px;color:var(--dim);flex-shrink:0">${esc(t.artist||'')} ${t.play_count?'· '+t.play_count+'▶':''}</span>
-      </div>`
-    ).join('') : '<div class="empty" style="padding:12px">No hot tracks right now</div>';
-
-    // Recent additions
-    const recent = (recentR.items||[]).slice(0,6);
-    const recentHtml = recent.length ? recent.map(t=>
-      `<div class="svc-row" style="padding:8px 4px;border-bottom:1px solid rgba(255,255,255,.04)">
-        <span style="font-size:11px;color:var(--neon);min-width:56px;flex-shrink:0">${esc(slapName(t.username||''))}</span>
-        <span style="flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${esc((t.title||t.name||'').slice(0,32))}</span>
-        <span style="font-size:11px;color:var(--dim);flex-shrink:0">${esc((t.artist||'').slice(0,18))}</span>
-      </div>`
-    ).join('') : '<div class="empty" style="padding:12px">No recent tracks</div>';
-
-    $('slap-inner').innerHTML = `
-<div class="pip-section">
-  <p class="pip-title" style="display:flex;align-items:center;justify-content:space-between">
-    <span>🏆 Leaderboard</span>
-    <a href="https://slap.qureshi.io/dashboard" target="_blank" rel="noopener"
-       style="font-size:11px;color:var(--cyan);text-decoration:none;opacity:.7">Full dashboard ↗</a>
-  </p>
-  <div class="card" style="padding:4px 12px">${lbHtml}</div>
-</div>
-<div class="pip-section">
-  <p class="pip-title">🔥 Hot Right Now</p>
-  <div class="card" style="padding:4px 12px">${hotHtml}</div>
-</div>
-<div class="pip-section">
-  <p class="pip-title">🆕 Recently Added</p>
-  <div class="card" style="padding:4px 12px">${recentHtml}</div>
+      <div class="rank">${medal}</div>
+      <div class="who" style="flex:1">
+        <div class="name" style="color:${e.color||'var(--txt)'}">${esc(slapName(e.username))}</div>
+        <div class="bar"><i style="width:${bar}%;background:${e.color||'var(--neon)'}"></i></div>
+      </div>
+      <div style="font-family:'Orbitron',sans-serif;font-size:13px;color:${e.color||'var(--cyan)'};min-width:36px;text-align:right">${e.song_count}</div>
+    </div>`;
+    }).join('') : '<div class="empty">No data</div>';
+    html += `<div class="pip-section">
+  <p class="pip-title">🏆 Leaderboard</p>
+  <div class="card" style="padding:4px 12px">${lbRows}</div>
 </div>`;
 
-    // Non-blocking: vibe check
+    // 4. Streak Tracker
+    if(streaks.length){
+      const stRows = streaks.map(s=>`<div style="display:flex;align-items:center;gap:10px;padding:8px 4px;border-bottom:1px solid rgba(255,255,255,.04)">
+      <div style="width:32px;height:32px;border-radius:50%;display:flex;align-items:center;justify-content:center;font-family:'Orbitron',sans-serif;font-size:11px;font-weight:700;background:${s.color||'var(--neon)'}22;color:${s.color||'var(--neon)'};">${s.longest_streak||0}</div>
+      <div style="flex:1">
+        <div style="font-size:13px;font-weight:600;color:${s.color||'var(--txt)'}">${esc(slapName(s.username))}</div>
+        <div style="font-size:10px;color:var(--dim)">Best: ${s.longest_streak||0}d${s.is_active?' · 🔥 Active: '+(s.current_streak||0)+'d':''}</div>
+      </div>
+    </div>`).join('');
+      html += `<div class="pip-section">
+  <p class="pip-title">🔥 Streak Tracker</p>
+  <div class="card" style="padding:4px 12px">${stRows}</div>
+</div>`;
+    }
+
+    // 5. Taste DNA / Head-to-Head
+    const userOpts = lb.map(e=>`<option value="${esc(e.username)}">${esc(slapName(e.username))}</option>`).join('');
+    html += `<div class="pip-section">
+  <p class="pip-title">🧬 Taste DNA — Head to Head</p>
+  <div class="card" style="padding:14px 16px">
+    <div style="display:flex;align-items:center;gap:8px;margin-bottom:12px;flex-wrap:wrap">
+      <select id="slap-h2h-u1" onchange="slapH2H()" style="background:rgba(255,255,255,.06);border:1px solid rgba(34,230,255,.3);color:var(--txt);border-radius:8px;padding:6px 10px;font-size:12px;flex:1"><option value="">User 1</option>${userOpts}</select>
+      <span style="font-size:16px">⚔️</span>
+      <select id="slap-h2h-u2" onchange="slapH2H()" style="background:rgba(255,255,255,.06);border:1px solid rgba(34,230,255,.3);color:var(--txt);border-radius:8px;padding:6px 10px;font-size:12px;flex:1"><option value="">User 2</option>${userOpts}</select>
+    </div>
+    <div id="slap-h2h-out" style="color:var(--dim);font-size:12px;text-align:center;padding:8px 0">Select two users to compare</div>
+  </div>
+</div>`;
+
+    // 6. AI Recommendations
+    const recBtns = lb.slice(0,7).map(e=>`<button onclick="slapRec('${esc(e.username)}')" id="slap-rb-${esc(e.username)}" style="padding:5px 10px;border-radius:20px;border:1px solid rgba(255,255,255,.15);background:transparent;color:var(--dim);font-size:11px;cursor:pointer;font-family:'Rajdhani',sans-serif">${esc(slapName(e.username))}</button>`).join('');
+    html += `<div class="pip-section">
+  <p class="pip-title">🤖 AI Recommendations <span style="font-size:10px;color:var(--dim)">powered by Claude</span></p>
+  <div class="card" style="padding:12px 16px">
+    <div style="display:flex;flex-wrap:wrap;gap:6px;margin-bottom:12px">${recBtns}</div>
+    <div id="slap-rec-out" style="color:var(--dim);font-size:12px;text-align:center">Pick a user for AI recommendations</div>
+  </div>
+</div>`;
+
+    // 7. Timeline (pure CSS bars)
+    if(timeline.length){
+      const tlMax = Math.max(...timeline.map(t=>t.count),1);
+      const tlBars = timeline.map(t=>{
+        const h = Math.round((t.count/tlMax)*60);
+        return `<div title="${esc(t.date)}: ${t.count}" style="display:flex;flex-direction:column;align-items:center;gap:2px;cursor:default">
+        <div style="width:14px;background:linear-gradient(to top,var(--violet),var(--neon));border-radius:3px 3px 0 0;height:${h}px;min-height:${t.count?2:0}px;opacity:.85"></div>
+        <div style="font-size:8px;color:var(--dim);writing-mode:vertical-rl;transform:rotate(180deg);max-height:30px;overflow:hidden">${esc((t.date||'').slice(5))}</div>
+      </div>`;
+      }).join('');
+      html += `<div class="pip-section">
+  <p class="pip-title">📈 Submissions Over Time</p>
+  <div class="card" style="padding:12px 16px;overflow-x:auto">
+    <div style="display:flex;align-items:flex-end;gap:4px;min-height:80px;padding-bottom:34px">${tlBars}</div>
+  </div>
+</div>`;
+    }
+
+    // 8. Platform Breakdown
+    if(genres.length){
+      const gMax = Math.max(...genres.map(g=>g.count),1);
+      const gClrs = ['var(--neon)','var(--cyan)','var(--violet)','var(--gold)','var(--lime)','#ec4899','#ef4444','#10b981'];
+      const gRows = genres.map((g,i)=>`<div style="margin-bottom:8px">
+      <div style="display:flex;justify-content:space-between;font-size:12px;margin-bottom:3px"><span>${esc(g.name)}</span><span style="color:var(--dim)">${g.count}</span></div>
+      <div style="background:rgba(255,255,255,.06);border-radius:4px;height:6px;overflow:hidden"><div style="height:100%;width:${Math.round((g.count/gMax)*100)}%;background:${gClrs[i%gClrs.length]};border-radius:4px"></div></div>
+    </div>`).join('');
+      html += `<div class="pip-section">
+  <p class="pip-title">🍩 Platform Breakdown</p>
+  <div class="card" style="padding:12px 16px">${gRows}</div>
+</div>`;
+    }
+
+    // 9. Activity Heatmap (pure HTML grid)
+    {
+      const cells = heatmap.cells||[];
+      const hMax = heatmap.max_count||1;
+      const days = ['Sun','Mon','Tue','Wed','Thu','Fri','Sat'];
+      const lookup = {};
+      cells.forEach(c=>{ lookup[c.day+'-'+c.hour]=c.count; });
+      const hmRows = days.map((d,di)=>{
+        const cols = Array.from({length:24},(_,h)=>{
+          const cnt = lookup[di+'-'+h]||0;
+          const bg = cnt?`rgba(157,92,255,${(0.15+Math.min(cnt/hMax,1)*0.75).toFixed(2)})`:'rgba(255,255,255,.04)';
+          return `<div title="${d} ${h}:00 — ${cnt} songs" style="width:14px;height:14px;border-radius:3px;background:${bg};flex-shrink:0"></div>`;
+        }).join('');
+        return `<div style="display:flex;align-items:center;gap:3px;margin-bottom:3px"><div style="width:26px;font-size:9px;color:var(--dim);text-align:right;flex-shrink:0">${d}</div>${cols}</div>`;
+      }).join('');
+      const hmLbls = Array.from({length:8},(_,i)=>`<div style="flex:1;font-size:8px;color:var(--dim);text-align:center">${i*3}h</div>`).join('');
+      html += `<div class="pip-section">
+  <p class="pip-title">📊 Activity Heatmap <span style="font-size:10px;color:var(--dim)">hour × day</span></p>
+  <div class="card" style="padding:12px 16px;overflow-x:auto">
+    <div style="min-width:400px">
+      <div style="display:flex;margin-left:29px;margin-bottom:4px">${hmLbls}</div>
+      ${hmRows}
+    </div>
+  </div>
+</div>`;
+    }
+
+    // 10. Top Artists
+    if(artists.length){
+      const aMax = artists[0].count||1;
+      const aRows = artists.map((a,i)=>`<div style="display:flex;align-items:center;gap:8px;padding:7px 4px;border-bottom:1px solid rgba(255,255,255,.04)">
+      <span style="font-family:'Orbitron',sans-serif;font-size:10px;color:var(--dim);width:18px;text-align:right;flex-shrink:0">${i+1}</span>
+      <div style="flex:1;min-width:0">
+        <div style="font-size:13px;font-weight:600;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${esc(a.name)}</div>
+        <div style="height:4px;background:rgba(255,255,255,.06);border-radius:2px;margin-top:4px;overflow:hidden"><div style="height:100%;width:${Math.round((a.count/aMax)*100)}%;background:linear-gradient(90deg,var(--violet),var(--cyan));border-radius:2px"></div></div>
+      </div>
+      <span style="font-family:'Orbitron',sans-serif;font-size:12px;color:var(--violet);flex-shrink:0">${a.count}</span>
+    </div>`).join('');
+      html += `<div class="pip-section">
+  <p class="pip-title">🎤 Top Artists</p>
+  <div class="card" style="padding:4px 12px">${aRows}</div>
+</div>`;
+    }
+
+    // 11. Achievements
+    if(achieves.length){
+      const achHtml = achieves.map(a=>`<div title="${esc(a.description||'')}${a.unlocked?' — '+(a.unlocked_by||[]).join(', '):'  — Locked'}" style="border-radius:10px;padding:10px 8px;text-align:center;background:${a.unlocked?'rgba(255,255,255,.05)':'rgba(0,0,0,.3)'};border:1px solid ${a.unlocked?'rgba(157,92,255,.35)':'rgba(255,255,255,.05)'};opacity:${a.unlocked?'1':'.4'}">
+      <div style="font-size:22px;filter:${a.unlocked?'none':'grayscale(1)'}">${a.emoji||'🎖️'}</div>
+      <div style="font-size:10px;font-weight:600;color:${a.unlocked?'var(--txt)':'var(--dim)'};margin-top:4px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${esc(a.name)}</div>
+      <div style="font-size:9px;color:var(--dim);margin-top:2px">${a.unlocked?(a.unlocked_by||[]).join(', '):'🔒'}</div>
+    </div>`).join('');
+      html += `<div class="pip-section">
+  <p class="pip-title">🏅 Achievements</p>
+  <div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(82px,1fr));gap:8px">${achHtml}</div>
+</div>`;
+    }
+
+    // 12. Hipster Index
+    if(hipsters.length){
+      const hipRows = hipsters.map((h,i)=>`<div style="display:flex;align-items:center;gap:10px;padding:8px 4px;border-bottom:1px solid rgba(255,255,255,.04)">
+      <span style="font-size:18px">${i===0?'🎩':i===1?'🕶️':'🎧'}</span>
+      <div style="flex:1">
+        <div style="font-size:13px;font-weight:600;color:${h.color||'var(--txt)'}">${esc(slapName(h.username))}</div>
+        <div style="font-size:10px;color:var(--dim)">${h.unique_artists} unique artists</div>
+      </div>
+      <div style="text-align:right">
+        <div style="font-family:'Orbitron',sans-serif;font-size:14px;color:${(h.hipster_score||0)<=2?'var(--violet)':(h.hipster_score||0)<=3?'var(--cyan)':'var(--dim)'}">${(h.hipster_score||0).toFixed(1)}</div>
+        <div style="font-size:9px;color:var(--dim)">score</div>
+      </div>
+    </div>`).join('');
+      html += `<div class="pip-section">
+  <p class="pip-title">🎩 Hipster Index <span style="font-size:10px;color:var(--dim)">lower = more obscure</span></p>
+  <div class="card" style="padding:4px 12px">${hipRows}</div>
+</div>`;
+    }
+
+    // 13. Personality Cards
+    if(persons.length){
+      const pCards = persons.map(p=>`<div style="border-radius:10px;padding:12px;border:1px solid ${p.color||'var(--neon)'}33;background:linear-gradient(135deg,${p.color||'var(--neon)'}11,transparent)">
+      <div style="font-size:12px;font-weight:700;color:${p.color||'var(--txt)'};margin-bottom:4px">${esc(slapName(p.username))}</div>
+      <div style="font-size:13px;font-weight:600">${esc(p.personality||'')}</div>
+      <div style="font-size:11px;color:var(--dim);margin-top:4px">${esc(p.description||'')}</div>
+    </div>`).join('');
+      html += `<div class="pip-section">
+  <p class="pip-title">🎭 Personality Cards</p>
+  <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px">${pCards}</div>
+</div>`;
+    }
+
+    // 14. Hall of Fame
+    if(hof.length){
+      const hofCards = hof.map(f=>`<div style="background:linear-gradient(135deg,rgba(255,210,74,.07),rgba(255,210,74,.02));border:1px solid rgba(255,210,74,.25);border-radius:10px;padding:14px;text-align:center">
+      <div style="font-size:26px;margin-bottom:6px">${f.emoji||'🏆'}</div>
+      <div style="font-size:11px;font-weight:700;color:var(--gold)">${esc(f.title||'')}</div>
+      <div style="font-size:10px;color:var(--dim);margin-top:4px">${esc(f.description||'')}</div>
+      <div style="font-size:13px;color:var(--txt);margin-top:6px;font-weight:600">${esc(f.value||'')}</div>
+    </div>`).join('');
+      html += `<div class="pip-section">
+  <p class="pip-title" style="text-align:center">🏛️ Hall of Fame</p>
+  <div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(118px,1fr));gap:8px">${hofCards}</div>
+</div>`;
+    }
+
+    // 15. Recent Activity Feed
+    const recentRows = recent.length ? recent.slice(0,15).map(t=>`<div style="display:flex;align-items:center;gap:8px;padding:8px 4px;border-bottom:1px solid rgba(255,255,255,.04)">
+      <span style="font-size:14px;flex-shrink:0">${slapPlat(t.source_platform)}</span>
+      <div style="flex:1;min-width:0">
+        <div style="font-size:13px;font-weight:600;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${esc((t.title||'').slice(0,32))}</div>
+        <div style="font-size:10px;color:var(--dim);overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${esc(t.artist||'')}${t.album?' · '+esc(t.album):''}</div>
+      </div>
+      <div style="text-align:right;flex-shrink:0">
+        <span style="font-size:10px;padding:2px 6px;border-radius:10px;background:${t.color||'var(--neon)'}22;color:${t.color||'var(--neon)'}">${esc(slapName(t.username||''))}</span>
+        <div style="font-size:9px;color:var(--dim);margin-top:2px">${slapAgo(t.created_at)}</div>
+      </div>
+    </div>`).join('') : '<div class="empty" style="padding:12px">No recent tracks</div>';
+    html += `<div class="pip-section">
+  <p class="pip-title" style="display:flex;align-items:center;justify-content:space-between">
+    <span>📜 Recent Activity</span>
+    <a href="https://slap.qureshi.io/dashboard" target="_blank" rel="noopener" style="font-size:10px;color:var(--cyan);text-decoration:none;opacity:.7">Full dashboard ↗</a>
+  </p>
+  <div class="card" style="padding:4px 12px">${recentRows}</div>
+</div>`;
+
+    $('slap-inner').innerHTML = html;
+
+    // Non-blocking: AI vibe check
     fetch(SLAP_BASE+'/ai/vibe-check').then(r=>r.json()).then(d=>{
-      const v = d.vibe;
-      if(v && !v.includes('unavailable')){
+      if(d.vibe&&!d.vibe.includes('unavailable')){
         const el=$('slap-vibe');
         el.style.display='block';
-        el.innerHTML='<span style="color:var(--neon)">✨ Squad vibe:</span> '+esc(v);
+        el.innerHTML=`<span style="font-size:18px">${d.mood_emoji||'✨'}</span> <strong style="color:var(--neon)">${esc(d.vibe)}</strong>`+
+          (d.description?`<div style="margin-top:4px;font-size:12px">${esc(d.description)}</div>`:'');
       }
+    }).catch(()=>{});
+
+    // Non-blocking: weekly digest
+    fetch(SLAP_BASE+'/ai/digest').then(r=>r.json()).then(d=>{
+      if(d.digest&&!d.digest.includes('unavailable')){
+        const el=$('slap-digest');
+        el.style.display='block';
+        const hi=(d.highlights||[]).map(h=>`<span style="display:inline-block;padding:2px 8px;border-radius:12px;font-size:10px;background:rgba(157,92,255,.1);color:var(--violet);border:1px solid rgba(157,92,255,.2);margin:2px">${esc(h)}</span>`).join('');
+        el.innerHTML=`<div style="display:flex;gap:8px;align-items:flex-start"><span style="font-size:16px">📰</span><div><div style="font-size:10px;color:var(--dim);text-transform:uppercase;letter-spacing:.5px;margin-bottom:4px">Weekly Digest</div><div style="font-size:13px;line-height:1.5">${esc(d.digest)}</div>${hi?`<div style="margin-top:6px">${hi}</div>`:''}</div></div>`;
+      }
+    }).catch(()=>{});
+
+    // Non-blocking: scrobble/listening stats
+    fetch(SLAP_BASE+'/listening').then(r=>r.json()).then(d=>{
+      if(!d.enabled||(!(d.top_artists||[]).length&&!(d.top_tracks||[]).length)) return;
+      const aH=(d.top_artists||[]).slice(0,5).map((a,i)=>`<div style="display:flex;align-items:center;gap:6px;padding:4px 0;border-bottom:1px solid rgba(255,255,255,.04)"><span style="font-size:10px;color:var(--dim);width:14px">${i+1}</span><span style="flex:1;font-size:12px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${esc(a.name)}</span><span style="font-size:10px;color:var(--violet)">${a.scrobbles}×</span></div>`).join('');
+      const tH=(d.top_tracks||[]).slice(0,5).map((t,i)=>`<div style="display:flex;align-items:center;gap:6px;padding:4px 0;border-bottom:1px solid rgba(255,255,255,.04)"><span style="font-size:10px;color:var(--dim);width:14px">${i+1}</span><div style="flex:1;min-width:0"><div style="font-size:12px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${esc(t.name)}</div><div style="font-size:10px;color:var(--dim)">${esc(t.artist||'')}</div></div><span style="font-size:10px;color:var(--violet)">${t.scrobbles}×</span></div>`).join('');
+      const sec=document.createElement('div');
+      sec.className='pip-section';
+      sec.innerHTML=`<p class="pip-title">🎧 On Repeat IRL <span style="font-size:10px;color:var(--dim)">Last ${d.period_days||7}d · ${d.total_scrobbles||0} plays</span></p><div style="display:grid;grid-template-columns:1fr 1fr;gap:8px"><div class="card" style="padding:8px 10px"><div style="font-size:10px;color:var(--dim);text-transform:uppercase;margin-bottom:6px">Top Artists</div>${aH}</div><div class="card" style="padding:8px 10px"><div style="font-size:10px;color:var(--dim);text-transform:uppercase;margin-bottom:6px">Top Tracks</div>${tH}</div></div>`;
+      const inner=$('slap-inner');
+      if(inner) inner.insertBefore(sec,inner.firstChild);
     }).catch(()=>{});
 
   } catch(e) {
     $('slap-inner').innerHTML='<div class="card"><div class="empty">Could not load Slapshare.</div></div>';
   }
+}
+
+async function slapH2H(){
+  const u1=document.getElementById('slap-h2h-u1')?.value;
+  const u2=document.getElementById('slap-h2h-u2')?.value;
+  const el=document.getElementById('slap-h2h-out');
+  if(!el) return;
+  if(!u1||!u2||u1===u2){ el.innerHTML='<span style="color:var(--dim)">Select two different users</span>'; return; }
+  el.innerHTML='<div class="spin" style="margin:8px auto"></div>';
+  try {
+    const [d,ai]=await Promise.all([
+      fetch(`${SLAP_BASE}/head-to-head/${u1}/${u2}`).then(r=>r.json()),
+      fetch(`${SLAP_BASE}/taste-dna/${u1}/${u2}`).then(r=>r.json()).catch(()=>null),
+    ]);
+    const tot=Math.max((d.user1_songs||0)+(d.user2_songs||0),1);
+    const p1=Math.round((d.user1_songs||0)/tot*100);
+    const shared=(d.shared_artists||[]).slice(0,6).map(a=>`<span style="display:inline-block;padding:2px 7px;border-radius:10px;font-size:10px;background:rgba(157,92,255,.1);color:var(--violet);border:1px solid rgba(157,92,255,.2);margin:2px">${esc(a)}</span>`).join('');
+    let out=`<div style="margin-bottom:10px"><div style="display:flex;justify-content:space-between;font-size:12px;margin-bottom:4px"><span style="color:${d.user1_color||'var(--neon)'}">${esc(slapName(u1))} — ${d.user1_songs||0}</span><span style="color:${d.user2_color||'var(--cyan)'}">${d.user2_songs||0} — ${esc(slapName(u2))}</span></div><div style="height:8px;border-radius:4px;overflow:hidden;display:flex"><div style="height:100%;width:${p1}%;background:${d.user1_color||'var(--neon)'}"></div><div style="height:100%;width:${100-p1}%;background:${d.user2_color||'var(--cyan)'}"></div></div></div>${shared?`<div style="margin-bottom:8px"><div style="font-size:10px;color:var(--dim);margin-bottom:4px">🧬 ${(d.shared_artists||[]).length} artists in common:</div>${shared}</div>`:''}`;
+    if(ai&&ai.analysis) out+=`<div style="background:rgba(157,92,255,.08);border:1px solid rgba(157,92,255,.2);border-radius:10px;padding:12px;margin-top:8px"><div style="font-size:10px;color:var(--violet);margin-bottom:6px">🤖 AI Taste Analysis</div><div style="font-size:12px;line-height:1.5">${esc(ai.analysis)}</div>${ai.compatibility_score!=null?`<div style="display:flex;align-items:center;gap:8px;margin-top:8px"><span style="font-size:10px;color:var(--dim)">Compatibility:</span><div style="flex:1;height:6px;background:rgba(255,255,255,.06);border-radius:3px;overflow:hidden"><div style="height:100%;width:${ai.compatibility_score}%;background:linear-gradient(90deg,var(--violet),var(--neon));border-radius:3px"></div></div><span style="font-size:12px;font-family:'Orbitron',sans-serif;color:var(--violet)">${ai.compatibility_score}%</span></div>`:''}</div>`;
+    el.innerHTML=out;
+  } catch(err){ el.innerHTML='<span style="color:var(--dim)">Could not load comparison.</span>'; }
+}
+
+async function slapRec(username){
+  const el=document.getElementById('slap-rec-out');
+  if(!el) return;
+  document.querySelectorAll('[id^="slap-rb-"]').forEach(b=>{ b.style.background='transparent';b.style.borderColor='rgba(255,255,255,.15)';b.style.color='var(--dim)'; });
+  const btn=document.getElementById('slap-rb-'+username);
+  if(btn){ btn.style.background='rgba(157,92,255,.2)';btn.style.borderColor='var(--violet)';btn.style.color='var(--violet)'; }
+  el.innerHTML='<div class="spin" style="margin:8px auto"></div>';
+  try {
+    const d=await fetch(`${SLAP_BASE}/ai/recommendations/${username}`).then(r=>r.json());
+    const icons=['🎵','🎶','🎧','🎤','🎸','🎹'];
+    el.innerHTML=(d.reasoning?`<div style="font-size:11px;color:var(--dim);font-style:italic;margin-bottom:8px">${esc(d.reasoning)}</div>`:'')+
+      (d.recommendations||[]).slice(0,6).map((r,i)=>`<div style="display:flex;align-items:center;gap:8px;padding:7px 10px;border-radius:8px;background:rgba(255,255,255,.03);margin-bottom:4px"><span>${icons[i]||'🎵'}</span><span style="font-size:12px">${esc(r)}</span></div>`).join('');
+  } catch(err){ el.innerHTML='<span style="color:var(--dim)">Could not load recommendations.</span>'; }
 }
 
 function toggleUserMenu(){
