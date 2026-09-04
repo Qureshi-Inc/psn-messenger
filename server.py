@@ -2305,11 +2305,20 @@ def api_hype():
             if not ts:
                 continue
             try:
-                d = _dt.datetime.fromisoformat(str(ts).replace("Z", "+00:00")).date()
+                ts_int = int(ts)
+                # PSN returns milliseconds; convert to seconds
+                if ts_int > 1e11:
+                    ts_int //= 1000
+                d = _dt.datetime.fromtimestamp(ts_int, tz=_dt.timezone.utc).date()
                 if d == today:
                     count += 1
             except Exception:
-                continue
+                try:
+                    d = _dt.datetime.fromisoformat(str(ts).replace("Z", "+00:00")).date()
+                    if d == today:
+                        count += 1
+                except Exception:
+                    continue
         pct = min(100, round(count / _HYPE_MAX * 100))
         if count == 0:
             label, level = "☠️ DEAD SILENT", "dead"
@@ -3120,14 +3129,13 @@ renderButtons();
 function showSentFly(avatarUrl, senderName, msgText, originEl){
   const el = document.createElement('div');
   el.className = 'sent-fly';
-  // Position at the button that triggered the send
+  // Horizontally centered; vertically anchored to the button that was pressed
+  el.style.left = '50%';
   if(originEl){
     const r = originEl.getBoundingClientRect();
-    el.style.top  = (r.top + r.height/2 - 30) + 'px';
-    el.style.left = (r.left + r.width/2) + 'px';
+    el.style.top = (r.top + r.height/2 - 30) + 'px';
   } else {
     el.style.bottom = 'calc(var(--board-h,220px) + 12px)';
-    el.style.left = '50%';
   }
   const avHtml = avatarUrl
     ? '<img class="sf-av" src="'+avatarUrl+'" onerror="this.parentNode.innerHTML=\'<div class=sf-av-fallback>🎮</div>\'">'
