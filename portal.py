@@ -231,7 +231,7 @@ def link_user(raw_npsso: str, mm_username: str = "", zitadel_user_id: str = "") 
 
     USERS_DIR.mkdir(parents=True, exist_ok=True)
     new_file = USERS_DIR / f"{key}.json"
-    # Remove any stale files for the same PSN account_id (avoids squad duplicates)
+    # Remove stale files for the same account_id; inherit mm_username if not provided
     if account_id:
         for f in USERS_DIR.glob("*.json"):
             if f == new_file:
@@ -239,6 +239,8 @@ def link_user(raw_npsso: str, mm_username: str = "", zitadel_user_id: str = "") 
             try:
                 d = json.loads(f.read_text())
                 if str(d.get("account_id")) == str(account_id):
+                    if not record["mm_username"] and d.get("mm_username"):
+                        record["mm_username"] = d["mm_username"]
                     logger.info("portal: removing stale duplicate %s for account_id=%s", f.name, account_id)
                     f.unlink()
             except Exception:
