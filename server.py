@@ -2734,8 +2734,8 @@ _DASHBOARD_TMPL = r"""<!doctype html>
   .toast.show { opacity:1; }
 
   /* ── Sent flyout animation ── */
-  .sent-fly { position:fixed; left:50%; bottom:calc(var(--board-h,220px) + 12px);
-    transform:translateX(-50%); z-index:200; pointer-events:none;
+  .sent-fly { position:fixed; z-index:200; pointer-events:none;
+    transform:translateX(-50%);
     display:flex; align-items:center; gap:10px;
     background:rgba(12,6,28,.82); border:1px solid rgba(255,255,255,.14);
     backdrop-filter:blur(18px); -webkit-backdrop-filter:blur(18px);
@@ -3117,9 +3117,18 @@ if(localStorage.getItem('sb_collapsed')==='1') $('boardWrap').classList.add('col
 window.addEventListener('resize', syncBoardHeight);
 renderButtons();
 // ── Sent flyout: avatar card that floats up and fades away ───────────────────
-function showSentFly(avatarUrl, senderName, msgText){
+function showSentFly(avatarUrl, senderName, msgText, originEl){
   const el = document.createElement('div');
   el.className = 'sent-fly';
+  // Position at the button that triggered the send
+  if(originEl){
+    const r = originEl.getBoundingClientRect();
+    el.style.top  = (r.top + r.height/2 - 30) + 'px';
+    el.style.left = (r.left + r.width/2) + 'px';
+  } else {
+    el.style.bottom = 'calc(var(--board-h,220px) + 12px)';
+    el.style.left = '50%';
+  }
   const avHtml = avatarUrl
     ? '<img class="sf-av" src="'+avatarUrl+'" onerror="this.parentNode.innerHTML=\'<div class=sf-av-fallback>🎮</div>\'">'
     : '<div class="sf-av-fallback">🎮</div>';
@@ -3142,7 +3151,7 @@ async function fire(el){
     if(b.path){ r = await fetch(b.path,{method:'POST'}); }
     else { r = await fetch('/v2/squad',{method:'POST',headers:{'Content-Type':'application/json'},
       body:JSON.stringify({message:b.msg})}); }
-    if(r.ok) showSentFly(MOD_AVATAR, 'CRCMZ MOD', b.label||b.msg||'');
+    if(r.ok) showSentFly(MOD_AVATAR, 'CRCMZ MOD', b.label||b.msg||'', el);
     else toast('Failed ('+r.status+')');
   } catch(e){ toast('Network error'); }
 }
@@ -3158,7 +3167,7 @@ async function sendQuick(){
     if(r.ok){
       inp.value='';
       const name = MY_PSN_ID || 'You';
-      showSentFly(MY_AVATAR, name, msg);
+      showSentFly(MY_AVATAR, name, msg, btn);
     } else if(r.status===429){ toast('Slow down a sec ⏳'); }
     else toast('Failed ('+r.status+')');
   } catch(e){ toast('Network error'); }
