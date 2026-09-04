@@ -3073,19 +3073,21 @@ _DASHBOARD_TMPL = r"""<!doctype html>
     <button class="tab" data-p="lb" onclick="tab(this)"><span class="tab-icon">🏆</span><span class="tab-txt">Ranks</span></button>
     <button class="tab" data-p="pipeline" onclick="tab(this)"><span class="tab-icon">🎬</span><span class="tab-txt">Clips</span></button>
   </div>
-  <div id="together"></div>
-  <div class="hype-wrap" id="hypeMeter">
-    <div class="hype-head">
-      <div>
-        <div class="hype-title">Today's Hype</div>
-        <div class="hype-label" id="hypeLabel">…</div>
+  <div class="panel on" id="p-squad">
+    <div id="together"></div>
+    <div class="hype-wrap" id="hypeMeter">
+      <div class="hype-head">
+        <div>
+          <div class="hype-title">Today's Hype</div>
+          <div class="hype-label" id="hypeLabel">…</div>
+        </div>
+        <div class="hype-count"><span id="hypeCount">—</span> msgs</div>
       </div>
-      <div class="hype-count"><span id="hypeCount">—</span> msgs</div>
+      <div class="hype-track"><div class="hype-fill dead" id="hypeFill"></div></div>
     </div>
-    <div class="hype-track"><div class="hype-fill dead" id="hypeFill"></div></div>
+    <div class="statgrid" id="statgrid"></div>
+    <div class="card" id="squad"><div class="spin">Loading squad…</div></div>
   </div>
-  <div class="statgrid" id="statgrid"></div>
-  <div class="panel on" id="p-squad"><div class="card" id="squad"><div class="spin">Loading squad…</div></div></div>
   <div class="panel" id="p-lb"><div class="card" id="lb"><div class="spin">Loading leaderboard…</div></div></div>
   <div class="panel" id="p-pipeline"><div id="pipeline-inner"><div class="spin">Loading pipeline…</div></div></div>
 </div>
