@@ -3072,6 +3072,7 @@ _DASHBOARD_TMPL = r"""<!doctype html>
     <button class="tab on" data-p="squad" onclick="tab(this)"><span class="tab-icon">🎮</span><span class="tab-txt">Squad</span></button>
     <button class="tab" data-p="lb" onclick="tab(this)"><span class="tab-icon">🏆</span><span class="tab-txt">Ranks</span></button>
     <button class="tab" data-p="pipeline" onclick="tab(this)"><span class="tab-icon">🎬</span><span class="tab-txt">Clips</span></button>
+    <button class="tab" data-p="slap" onclick="tab(this);loadSlap()"><span class="tab-icon">🎵</span><span class="tab-txt">Slapshare</span></button>
   </div>
   <div class="panel on" id="p-squad">
     <div id="together"></div>
@@ -3090,6 +3091,11 @@ _DASHBOARD_TMPL = r"""<!doctype html>
   </div>
   <div class="panel" id="p-lb"><div class="card" id="lb"><div class="spin">Loading leaderboard…</div></div></div>
   <div class="panel" id="p-pipeline"><div id="pipeline-inner"><div class="spin">Loading pipeline…</div></div></div>
+  <div class="panel" id="p-slap">
+    <div id="slap-stats" class="statgrid" style="margin-bottom:10px"></div>
+    <div id="slap-vibe" class="card" style="display:none;margin-bottom:10px;padding:12px 16px;font-size:13px;color:var(--dim);font-style:italic;text-align:center"></div>
+    <div id="slap-inner"><div class="spin">Loading Slapshare…</div></div>
+  </div>
 </div>
 
 <div class="board-wrap" id="boardWrap">
@@ -3562,6 +3568,103 @@ ${(d.clips||[]).length ? `<div class="pip-section">
 }
 loadPipeline();
 setInterval(loadPipeline, 30000);
+
+// ── Slapshare music stats ─────────────────────────────────────────────────────
+const SLAP_BASE = 'https://slap.qureshi.io/api/v1/dashboard';
+let _slapLoaded = false;
+
+// Map slaptastic usernames → display names for the PS HQ context
+const SLAP_NAMES = {
+  moiz:'moiz', themoosecompany:'moose', shahraiz:'shahraiz',
+  zubair221b:'zubair', nooramin40:'noor', deception:'deception', asamad89:'asamad'
+};
+function slapName(u){ return SLAP_NAMES[u] || u; }
+
+async function loadSlap() {
+  if (_slapLoaded) return;  // lazy: only fetch once per page load; refresh is manual
+  _slapLoaded = true;
+  try {
+    const [statsR, lbR, recentR, hotR] = await Promise.all([
+      fetch(SLAP_BASE+'/stats').then(r=>r.json()),
+      fetch(SLAP_BASE+'/leaderboard').then(r=>r.json()),
+      fetch(SLAP_BASE+'/recent?limit=8').then(r=>r.json()),
+      fetch(SLAP_BASE+'/hot').then(r=>r.json()),
+    ]);
+
+    // Stats bar
+    const stats = statsR || {};
+    $('slap-stats').innerHTML =
+      '<div class="stile"><div class="sv">'+(stats.total_songs??'—')+'</div><div class="sl">🎵 Total Tracks</div></div>'+
+      '<div class="stile"><div class="sv">'+(stats.total_contributors??'—')+'</div><div class="sl">👥 Contributors</div></div>'+
+      '<div class="stile"><div class="sv" style="font-size:12px">'+(stats.top_artist?esc(stats.top_artist).slice(0,14):'—')+'</div><div class="sl">🎤 Top Artist</div></div>';
+
+    // Leaderboard
+    const lb = (lbR.entries||[]).slice(0,7);
+    const lbHtml = lb.length ? lb.map((e,i)=>{
+      const medal = i<3?['🥇','🥈','🥉'][i]:'#'+(i+1);
+      const bar = lb[0].song_count ? Math.round((e.song_count/lb[0].song_count)*100) : 0;
+      return `<div class="lb-row">
+        <div class="rank">${medal}</div>
+        <div class="who" style="flex:1">
+          <div class="name">${esc(slapName(e.username))}</div>
+          <div class="bar"><i style="width:${bar}%;background:linear-gradient(90deg,var(--neon),var(--violet))"></i></div>
+        </div>
+        <div style="font-family:'Orbitron',sans-serif;font-size:13px;color:var(--cyan);min-width:32px;text-align:right">${e.song_count}</div>
+      </div>`;
+    }).join('') : '<div class="empty">No leaderboard data</div>';
+
+    // Hot right now
+    const hot = (hotR.items||hotR.hot||[]).slice(0,5);
+    const hotHtml = hot.length ? hot.map((t,i)=>
+      `<div class="svc-row" style="padding:8px 4px;border-bottom:1px solid rgba(255,255,255,.04)">
+        <span style="font-family:'Orbitron',sans-serif;font-size:11px;color:var(--gold);min-width:20px">#${i+1}</span>
+        <span style="flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${esc((t.title||t.name||'').slice(0,36))}</span>
+        <span style="font-size:11px;color:var(--dim);flex-shrink:0">${esc(t.artist||'')} ${t.play_count?'· '+t.play_count+'▶':''}</span>
+      </div>`
+    ).join('') : '<div class="empty" style="padding:12px">No hot tracks right now</div>';
+
+    // Recent additions
+    const recent = (recentR.items||[]).slice(0,6);
+    const recentHtml = recent.length ? recent.map(t=>
+      `<div class="svc-row" style="padding:8px 4px;border-bottom:1px solid rgba(255,255,255,.04)">
+        <span style="font-size:11px;color:var(--neon);min-width:56px;flex-shrink:0">${esc(slapName(t.username||''))}</span>
+        <span style="flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${esc((t.title||t.name||'').slice(0,32))}</span>
+        <span style="font-size:11px;color:var(--dim);flex-shrink:0">${esc((t.artist||'').slice(0,18))}</span>
+      </div>`
+    ).join('') : '<div class="empty" style="padding:12px">No recent tracks</div>';
+
+    $('slap-inner').innerHTML = `
+<div class="pip-section">
+  <p class="pip-title" style="display:flex;align-items:center;justify-content:space-between">
+    <span>🏆 Leaderboard</span>
+    <a href="https://slap.qureshi.io/dashboard" target="_blank" rel="noopener"
+       style="font-size:11px;color:var(--cyan);text-decoration:none;opacity:.7">Full dashboard ↗</a>
+  </p>
+  <div class="card" style="padding:4px 12px">${lbHtml}</div>
+</div>
+<div class="pip-section">
+  <p class="pip-title">🔥 Hot Right Now</p>
+  <div class="card" style="padding:4px 12px">${hotHtml}</div>
+</div>
+<div class="pip-section">
+  <p class="pip-title">🆕 Recently Added</p>
+  <div class="card" style="padding:4px 12px">${recentHtml}</div>
+</div>`;
+
+    // Non-blocking: vibe check
+    fetch(SLAP_BASE+'/ai/vibe-check').then(r=>r.json()).then(d=>{
+      const v = d.vibe;
+      if(v && !v.includes('unavailable')){
+        const el=$('slap-vibe');
+        el.style.display='block';
+        el.innerHTML='<span style="color:var(--neon)">✨ Squad vibe:</span> '+esc(v);
+      }
+    }).catch(()=>{});
+
+  } catch(e) {
+    $('slap-inner').innerHTML='<div class="card"><div class="empty">Could not load Slapshare.</div></div>';
+  }
+}
 
 function toggleUserMenu(){
   const m=$('userMenu'); if(!m) return; m.classList.toggle('open');
