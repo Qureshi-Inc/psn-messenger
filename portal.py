@@ -180,12 +180,15 @@ def _safe_key(value: str) -> str:
     return "".join(c for c in value if c.isalnum() or c in "-_.").lower() or "user"
 
 
-def link_user(raw_npsso: str, mm_username: str = "") -> dict:
+def link_user(raw_npsso: str, mm_username: str = "", zitadel_user_id: str = "") -> dict:
     """Validate an NPSSO, mint tokens, detect the account, persist per-user.
 
     ``mm_username`` ties the PSN link to a known Mattermost person. When given,
     the record is keyed by that username (stable, human-readable) so re-linking
     the same person overwrites rather than duplicating.
+
+    ``zitadel_user_id`` is stored when the link comes from an authenticated
+    dashboard session, so the record can be retrieved by that user later.
 
     Returns a small summary dict for the UI. Raises LinkError on any failure
     with a friendly message.
@@ -198,9 +201,11 @@ def link_user(raw_npsso: str, mm_username: str = "") -> dict:
     account_id = profile.get("account_id")
     online_id = profile.get("online_id")
 
-    # Key preference: chosen Mattermost user > PSN account id > timestamp.
-    # This keeps the file tied to the real person and idempotent on re-link.
-    if mm_username:
+    # Key preference: Zitadel user ID > chosen Mattermost user > PSN account id > timestamp.
+    # Zitadel ID is most stable — guarantees one record per dashboard account.
+    if zitadel_user_id:
+        key = f"z-{_safe_key(zitadel_user_id)}"
+    elif mm_username:
         key = _safe_key(mm_username)
     elif account_id:
         key = str(account_id)
@@ -212,6 +217,7 @@ def link_user(raw_npsso: str, mm_username: str = "") -> dict:
     now = time.time()
 
     record = {
+        "zitadel_user_id": zitadel_user_id or None,
         "mm_username": mm_username or None,
         "online_id": online_id,
         "account_id": account_id,
@@ -226,13 +232,15 @@ def link_user(raw_npsso: str, mm_username: str = "") -> dict:
     USERS_DIR.mkdir(parents=True, exist_ok=True)
     (USERS_DIR / f"{key}.json").write_text(json.dumps(record, indent=2))
     logger.info(
-        "portal: linked mm=%s online_id=%s account_id=%s",
+        "portal: linked zitadel=%s mm=%s online_id=%s account_id=%s",
+        zitadel_user_id or "-",
         mm_username or "-",
         online_id,
         account_id,
     )
 
-    return {"online_id": online_id, "account_id": account_id, "mm_username": mm_username}
+    return {"online_id": online_id, "account_id": account_id, "mm_username": mm_username,
+            "zitadel_user_id": zitadel_user_id}
 
 
 def list_users() -> list[dict]:
@@ -247,6 +255,7 @@ def list_users() -> list[dict]:
             continue
         out.append(
             {
+                "zitadel_user_id": d.get("zitadel_user_id"),
                 "mm_username": d.get("mm_username"),
                 "online_id": d.get("online_id"),
                 "account_id": d.get("account_id"),
@@ -255,6 +264,27 @@ def list_users() -> list[dict]:
             }
         )
     return out
+
+
+def find_by_zitadel_id(zitadel_user_id: str) -> dict | None:
+    """Return the PSN record for a given Zitadel user ID, or None."""
+    if not zitadel_user_id or not USERS_DIR.exists():
+        return None
+    for f in USERS_DIR.glob("*.json"):
+        try:
+            d = json.loads(f.read_text())
+        except Exception:  # noqa: BLE001
+            continue
+        if d.get("zitadel_user_id") == zitadel_user_id:
+            return {
+                "online_id": d.get("online_id"),
+                "account_id": d.get("account_id"),
+                "linked_at": d.get("linked_at"),
+                "npsso_ok": bool(d.get("npsso")),
+                "token_ok": bool(d.get("access_token")),
+                "refresh_expires_at": d.get("refresh_expires_at"),
+            }
+    return None
 
 
 def mattermost_usernames() -> list[str]:

@@ -1244,6 +1244,21 @@ async def settings_change_password(request: Request):
         return JSONResponse({"error": "service unavailable"}, status_code=503)
 
 
+@app.get("/auth/settings/psn")
+async def settings_psn_status(request: Request):
+    """Return the PSN link status for the currently logged-in user."""
+    session = _get_session(request)
+    if not session:
+        return JSONResponse({"error": "not authenticated"}, status_code=401)
+    user_id = session.get("sub", "")
+    if not user_id:
+        return JSONResponse({"linked": False})
+    record = portal_mod.find_by_zitadel_id(user_id)
+    if not record:
+        return JSONResponse({"linked": False})
+    return JSONResponse({"linked": True, **record})
+
+
 @app.get("/auth/logout")
 async def auth_logout():
     resp = RedirectResponse(url="/auth/login", status_code=302)
@@ -1262,8 +1277,10 @@ def portal_link(
     npsso: str = Form(...),
     mm_username: str = Form(""),
 ):
+    zitadel_user_id = (_get_session(request) or {}).get("sub", "")
     try:
-        result = portal_mod.link_user(npsso, mm_username=mm_username.strip())
+        result = portal_mod.link_user(npsso, mm_username=mm_username.strip(),
+                                      zitadel_user_id=zitadel_user_id)
     except portal_mod.LinkError as e:
         return HTMLResponse(_portal_page(error=str(e)), status_code=400)
     except Exception as e:  # noqa: BLE001
@@ -3028,20 +3045,32 @@ function switchTab(name){
 async function loadPsnStatus(){
   const el=$('psnStatus');
   if(!el) return;
+  el.innerHTML='Loading…';
   try {
-    const r = await fetch('/portal/users');
-    const {users=[]} = await r.json();
-    if(!users.length){
-      el.innerHTML='No PSN accounts linked yet.';
-    } else {
-      el.innerHTML = users.map(u=>
-        `<div style="display:flex;align-items:center;gap:8px;margin-bottom:8px">
-          <span style="font-size:18px">🎮</span>
-          <span style="color:#fff;font-weight:600">${u.online_id||u.mm_username||'—'}</span>
-          ${u.mm_username?`<span style="font-size:11px;color:var(--dim)">(${u.mm_username})</span>`:''}
-        </div>`
-      ).join('');
+    const r = await fetch('/auth/settings/psn');
+    const d = await r.json();
+    if(!d.linked){
+      el.innerHTML='<span style="color:var(--dim)">No PlayStation account linked to your profile yet.</span>';
+      return;
     }
+    const linked = d.linked_at ? new Date(d.linked_at*1000).toLocaleDateString() : null;
+    const expiry = d.refresh_expires_at ? new Date(d.refresh_expires_at*1000) : null;
+    const expired = expiry && expiry < new Date();
+    el.innerHTML =
+      `<div style="display:flex;align-items:center;gap:10px;margin-bottom:14px">
+        <span style="font-size:28px">🎮</span>
+        <div>
+          <div style="color:#fff;font-weight:700;font-size:16px">${d.online_id||'—'}</div>
+          ${linked?`<div style="font-size:11px;color:var(--dim)">Linked ${linked}</div>`:''}
+        </div>
+        <span style="margin-left:auto;font-size:12px;padding:3px 9px;border-radius:20px;font-weight:700;
+          background:${expired?'rgba(255,60,60,.15)':'rgba(0,220,120,.12)'};
+          color:${expired?'#ff6060':'#00dc78'};
+          border:1px solid ${expired?'rgba(255,60,60,.3)':'rgba(0,220,120,.3)'}">
+          ${expired?'Expired':'Active'}
+        </span>
+      </div>
+      ${expired?'<div style="font-size:12.5px;color:#ff9060;margin-bottom:10px">⚠️ Your PSN token has expired. Re-link to refresh it.</div>':''}`;
   } catch(e){ el.innerHTML='Could not load PSN status.'; }
 }
 
