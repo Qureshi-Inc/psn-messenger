@@ -10,6 +10,16 @@ from psnawp_api import PSNAWP
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
 logger = logging.getLogger(__name__)
 
+# Suppress per-request access logs for health-check endpoints — Coolify/Traefik
+# polls these every few seconds and the noise drowns out real log lines.
+class _NoHealthFilter(logging.Filter):
+    def filter(self, record: logging.LogRecord) -> bool:
+        msg = record.getMessage()
+        return "/health" not in msg and "/v2/health" not in msg
+
+for _uvicorn_logger in ("uvicorn.access", "uvicorn"):
+    logging.getLogger(_uvicorn_logger).addFilter(_NoHealthFilter())
+
 NPSSO_TOKEN = os.environ.get("NPSSO_TOKEN")
 GROUP_ID = os.environ.get("GROUP_ID")
 GROUP_NAME = os.environ.get("GROUP_NAME", "crcmz-mod")
