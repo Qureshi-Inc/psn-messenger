@@ -63,15 +63,20 @@ _RL_LIMITS = {
 }
 
 
-def _rate_limit(key: str) -> None:
-    """Raise HTTP 429 if `key` exceeded its window. Sliding-window counter."""
+def _rate_limit(key: str, actor: str = "") -> None:
+    """Raise HTTP 429 if `key` exceeded its window. Sliding-window counter.
+
+    Pass `actor` (user_id or client IP) to scope the limit per-user so one
+    person cannot exhaust the quota for everyone else.
+    """
     limit = _RL_LIMITS.get(key)
     if not limit:
         return
     max_calls, window = limit
     now = _time.time()
+    bucket = f"{key}:{actor}" if actor else key
     with _rl_lock:
-        hits = [t for t in _rl_hits.get(key, []) if now - t < window]
+        hits = [t for t in _rl_hits.get(bucket, []) if now - t < window]
         if len(hits) >= max_calls:
             retry = round(window - (now - hits[0]), 1)
             raise HTTPException(
@@ -80,7 +85,7 @@ def _rate_limit(key: str) -> None:
                 headers={"Retry-After": str(int(retry) + 1)},
             )
         hits.append(now)
-        _rl_hits[key] = hits
+        _rl_hits[bucket] = hits
 
 
 import re as _re
@@ -100,7 +105,7 @@ def webauthn_related_origins():
 
 @app.get("/health")
 def health():
-    return {"status": "ok", "user": client.online_id, "group": GROUP_ID}
+    return {"status": "ok"}
 
 
 _FAVICON_PATH = Path(__file__).parent / "favicon.png"
@@ -162,12 +167,12 @@ except Exception as e:
 def v2_health():
     if not _v2_available:
         raise HTTPException(status_code=503, detail="v2 auth not initialized")
-    return {"status": "ok", "version": "v2", "group": GROUP_ID}
+    return {"status": "ok", "version": "v2"}
 
 
 @app.post("/v2/send")
-def v2_send_message(req: MessageRequest):
-    _rate_limit("psn_send")
+def v2_send_message(req: MessageRequest, request: Request):
+    _rate_limit("psn_send", request.client.host)
     if not _v2_available:
         raise HTTPException(status_code=503, detail="v2 auth not initialized")
     if not req.message.strip():
@@ -223,9 +228,9 @@ class SquadRequest(BaseModel):
 
 
 @app.post("/v2/squad")
-def v2_squad(req: SquadRequest | None = None):
+def v2_squad(request: Request, req: SquadRequest | None = None):
     """Post a 'squad up' rally message to the dedicated squad group."""
-    _rate_limit("psn_send")
+    _rate_limit("psn_send", request.client.host)
     if _squad_messenger is None:
         raise HTTPException(status_code=503, detail="squad messenger not initialized")
     text = (req.message.strip() if (req and req.message) else "") or \
@@ -265,9 +270,9 @@ async def roast_stop():
 
 
 @app.post("/roast/once")
-async def roast_once():
+async def roast_once(request: Request):
     """Send one roast immediately."""
-    _rate_limit("roast")
+    _rate_limit("roast", request.client.host)
     try:
         roast = roast_bot.generate_single_roast()
         roast_bot.send_roast(roast)
@@ -2214,15 +2219,15 @@ def api_soundboard():
 
 
 @app.post("/api/soundboard")
-def api_add_button(req: CustomButtonRequest):
+def api_add_button(req: CustomButtonRequest, request: Request):
     """Turn a user's line into an AI-flavored permanent soundboard button.
 
     Uses the same Bedrock model as the roast bot to punch up the text, saves it
     to /data/soundboard.json, and (optionally) sends it to the group right away.
     """
-    _rate_limit("custom_add")
+    _rate_limit("custom_add", request.client.host)
     if req.send:
-        _rate_limit("psn_send")
+        _rate_limit("psn_send", request.client.host)
     raw = (req.text or "").strip()
     if not raw:
         raise HTTPException(status_code=400, detail="Message cannot be empty")
