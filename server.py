@@ -2576,6 +2576,7 @@ _DASHBOARD_TMPL = r"""<!doctype html>
     <div class="stabs">
       <button class="stab active" onclick="switchTab('passkeys')">🔑 Passkeys</button>
       <button class="stab" onclick="switchTab('security')">🔒 Security</button>
+      <button class="stab" onclick="switchTab('psn')">🎮 PSN</button>
     </div>
 
     <!-- Passkeys tab -->
@@ -2602,6 +2603,17 @@ _DASHBOARD_TMPL = r"""<!doctype html>
         <button class="smodal-btn" onclick="changePassword()">Update password</button>
       </div>
     </div>
+
+    <!-- PSN tab -->
+    <div class="spanel" id="tab-psn">
+      <div class="smodal-sect">
+        <p class="smodal-sect-title">PlayStation account</p>
+        <div id="psnStatus" style="font-size:13.5px;color:var(--dim);margin-bottom:16px;line-height:1.6">
+          Loading…
+        </div>
+      </div>
+      <a class="smodal-btn" href="/portal" style="text-decoration:none">🎮 Link / re-link PSN account</a>
+    </div>
   </div>
 </div>
 
@@ -2625,7 +2637,6 @@ _DASHBOARD_TMPL = r"""<!doctype html>
   <div class="panel on" id="p-squad"><div class="card" id="squad"><div class="spin">Loading squad…</div></div></div>
   <div class="panel" id="p-lb"><div class="card" id="lb"><div class="spin">Loading leaderboard…</div></div></div>
   <div class="panel" id="p-pipeline"><div id="pipeline-inner"><div class="spin">Loading pipeline…</div></div></div>
-  <p style="text-align:center;margin:16px 0"><a class="link-cta" href="/portal">＋ Link your PlayStation account</a></p>
 </div>
 
 <div class="board-wrap" id="boardWrap">
@@ -3005,12 +3016,33 @@ function closeSettings(){ $('settingsOverlay').classList.remove('open'); }
 
 function switchTab(name){
   document.querySelectorAll('.stab').forEach((t,i)=>{
-    const names=['passkeys','security'];
+    const names=['passkeys','security','psn'];
     t.classList.toggle('active', names[i]===name);
   });
   document.querySelectorAll('.spanel').forEach(p=>{
     p.classList.toggle('active', p.id==='tab-'+name);
   });
+  if(name==='psn') loadPsnStatus();
+}
+
+async function loadPsnStatus(){
+  const el=$('psnStatus');
+  if(!el) return;
+  try {
+    const r = await fetch('/portal/users');
+    const {users=[]} = await r.json();
+    if(!users.length){
+      el.innerHTML='No PSN accounts linked yet.';
+    } else {
+      el.innerHTML = users.map(u=>
+        `<div style="display:flex;align-items:center;gap:8px;margin-bottom:8px">
+          <span style="font-size:18px">🎮</span>
+          <span style="color:#fff;font-weight:600">${u.online_id||u.mm_username||'—'}</span>
+          ${u.mm_username?`<span style="font-size:11px;color:var(--dim)">(${u.mm_username})</span>`:''}
+        </div>`
+      ).join('');
+    }
+  } catch(e){ el.innerHTML='Could not load PSN status.'; }
 }
 
 function _pkMsg(msg, type){ const el=$('pkMsg'); el.className='smsg '+type; el.textContent=msg; }
