@@ -737,7 +737,7 @@ def _login_page(error: str = "", next: str = "/") -> str:
   <form method="post" action="/auth/login?next={safe_next}" id="f">
     <label for="em">Email or username</label>
     <input type="text" name="email" id="em" required autocomplete="username"
-      placeholder="you@example.com or InterestingSoup" inputmode="email">
+      placeholder="Email or username" inputmode="email">
     <label for="pw">Password</label>
     <input type="password" name="pw" id="pw" required autocomplete="current-password"
       placeholder="Your password">
@@ -1150,6 +1150,97 @@ async def passkey_register_complete(request: Request):
         return JSONResponse({"ok": True})
     except Exception as e:
         logger.error("passkey/register/complete error: %s", e)
+        return JSONResponse({"error": "service unavailable"}, status_code=503)
+
+
+@app.get("/auth/settings/passkeys")
+async def settings_list_passkeys(request: Request):
+    session = _get_session(request)
+    if not session:
+        return JSONResponse({"error": "not authenticated"}, status_code=401)
+    user_id = session.get("sub", "")
+    if not user_id or not ZITADEL_SERVICE_TOKEN:
+        return JSONResponse({"passkeys": []})
+
+    import httpx as _hx
+    try:
+        async with _hx.AsyncClient(timeout=10) as c:
+            r = await c.post(
+                f"{ZITADEL_ISSUER}/v2/users/{user_id}/passkeys/search",
+                json={},
+                headers={"Authorization": f"Bearer {ZITADEL_SERVICE_TOKEN}"},
+            )
+        if r.status_code not in (200, 201):
+            logger.warning("settings/passkeys list: %s %s", r.status_code, r.text[:200])
+            return JSONResponse({"passkeys": []})
+        data = r.json()
+        passkeys = [
+            {"id": pk.get("id"), "name": pk.get("name"), "changeDate": pk.get("details", {}).get("changeDate")}
+            for pk in data.get("result", [])
+        ]
+        return JSONResponse({"passkeys": passkeys})
+    except Exception as e:
+        logger.error("settings/passkeys list error: %s", e)
+        return JSONResponse({"passkeys": []})
+
+
+@app.delete("/auth/settings/passkeys/{passkey_id}")
+async def settings_delete_passkey(passkey_id: str, request: Request):
+    session = _get_session(request)
+    if not session:
+        return JSONResponse({"error": "not authenticated"}, status_code=401)
+    user_id = session.get("sub", "")
+    if not user_id or not ZITADEL_SERVICE_TOKEN:
+        return JSONResponse({"error": "not configured"}, status_code=503)
+
+    import httpx as _hx
+    try:
+        async with _hx.AsyncClient(timeout=10) as c:
+            r = await c.delete(
+                f"{ZITADEL_ISSUER}/v2/users/{user_id}/passkeys/{passkey_id}",
+                headers={"Authorization": f"Bearer {ZITADEL_SERVICE_TOKEN}"},
+            )
+        if r.status_code not in (200, 201, 204):
+            logger.warning("settings/passkeys delete: %s %s", r.status_code, r.text[:200])
+            return JSONResponse({"error": "failed to delete"}, status_code=400)
+        return JSONResponse({"ok": True})
+    except Exception as e:
+        logger.error("settings/passkeys delete error: %s", e)
+        return JSONResponse({"error": "service unavailable"}, status_code=503)
+
+
+@app.post("/auth/settings/password")
+async def settings_change_password(request: Request):
+    session = _get_session(request)
+    if not session:
+        return JSONResponse({"error": "not authenticated"}, status_code=401)
+    user_id = session.get("sub", "")
+    if not user_id or not ZITADEL_SERVICE_TOKEN:
+        return JSONResponse({"error": "not configured"}, status_code=503)
+    body = await request.json()
+    current = body.get("currentPassword", "")
+    new_pw = body.get("newPassword", "")
+    if not current or not new_pw:
+        return JSONResponse({"error": "missing fields"}, status_code=400)
+
+    import httpx as _hx
+    try:
+        async with _hx.AsyncClient(timeout=10) as c:
+            r = await c.post(
+                f"{ZITADEL_ISSUER}/v2/users/{user_id}/password",
+                json={"currentPassword": current, "newPassword": new_pw},
+                headers={"Authorization": f"Bearer {ZITADEL_SERVICE_TOKEN}"},
+            )
+        if r.status_code not in (200, 201):
+            d = r.json()
+            msg = d.get("message", "")
+            if "current password" in msg.lower() or r.status_code == 401:
+                return JSONResponse({"error": "Current password is incorrect."}, status_code=400)
+            logger.warning("settings/password: %s %s", r.status_code, r.text[:200])
+            return JSONResponse({"error": "Failed to update password."}, status_code=400)
+        return JSONResponse({"ok": True})
+    except Exception as e:
+        logger.error("settings/password error: %s", e)
         return JSONResponse({"error": "service unavailable"}, status_code=503)
 
 
@@ -2119,7 +2210,7 @@ def _dashboard_html(user_email: str = "") -> str:
             '<button class="user-btn" id="userBtn" onclick="toggleUserMenu()" aria-label="Account">👤</button>'
             '<div class="user-drop" id="userMenu">'
             f'<div class="ud-name">{disp}</div>'
-            '<button class="ud-item" style="width:100%;border:none;cursor:pointer;margin-bottom:6px" onclick="registerPasskey()">🔑 Add passkey</button>'
+            '<button class="ud-item" style="width:100%;border:none;cursor:pointer;margin-bottom:6px" onclick="openSettings()">⚙️ Settings</button>'
             '<a class="ud-item" href="/auth/logout">Sign out</a>'
             '</div>'
         )
@@ -2419,8 +2510,102 @@ _DASHBOARD_TMPL = r"""<!doctype html>
     font-weight:700; color:var(--neon); text-decoration:none; text-align:center;
     background:rgba(255,47,214,.08); border:1px solid rgba(255,47,214,.25); }
   .ud-item:hover { background:rgba(255,47,214,.18); }
+
+  /* ── Settings modal ───────────────────────────────────────── */
+  .smodal-overlay { position:fixed; inset:0; background:rgba(0,0,0,.7);
+    backdrop-filter:blur(6px); -webkit-backdrop-filter:blur(6px);
+    z-index:1000; display:none; align-items:flex-start; justify-content:center;
+    padding:20px 12px; overflow-y:auto; }
+  .smodal-overlay.open { display:flex; animation:fade .2s ease both; }
+  .smodal { background:rgba(12,6,26,.98); border:1px solid rgba(255,47,214,.3);
+    border-radius:20px; width:100%; max-width:460px; padding:0;
+    box-shadow:0 24px 60px rgba(0,0,0,.8); overflow:hidden; }
+  .smodal-head { display:flex; align-items:center; justify-content:space-between;
+    padding:18px 20px 14px; border-bottom:1px solid rgba(255,255,255,.07); }
+  .smodal-head h2 { margin:0; font-size:16px; color:var(--neon); letter-spacing:.5px; }
+  .smodal-close { background:none; border:none; color:var(--dim); font-size:20px;
+    cursor:pointer; padding:0 4px; line-height:1; }
+  .smodal-close:hover { color:#fff; }
+  .stabs { display:flex; gap:6px; padding:14px 20px 0; border-bottom:1px solid rgba(255,255,255,.07); }
+  .stab { background:none; border:none; border-bottom:2px solid transparent;
+    color:var(--dim); font-size:13px; font-weight:700; cursor:pointer;
+    padding:0 4px 10px; letter-spacing:.4px; }
+  .stab.active { color:var(--neon); border-bottom-color:var(--neon); }
+  .spanel { display:none; padding:20px; }
+  .spanel.active { display:block; }
+  .smodal-sect { margin-bottom:20px; }
+  .smodal-sect-title { font-size:11px; color:var(--dim); text-transform:uppercase;
+    letter-spacing:1px; margin:0 0 10px; }
+  .pk-row { display:flex; align-items:center; justify-content:space-between;
+    background:rgba(255,255,255,.04); border:1px solid rgba(255,255,255,.08);
+    border-radius:10px; padding:10px 12px; margin-bottom:8px; }
+  .pk-info { display:flex; flex-direction:column; gap:2px; }
+  .pk-name { font-size:13.5px; font-weight:600; color:#fff; }
+  .pk-date { font-size:11px; color:var(--dim); }
+  .pk-del { background:rgba(255,60,60,.12); border:1px solid rgba(255,60,60,.3);
+    color:#ff6060; border-radius:8px; padding:5px 10px; font-size:12px;
+    font-weight:700; cursor:pointer; white-space:nowrap; }
+  .pk-del:hover { background:rgba(255,60,60,.25); }
+  .pk-empty { font-size:13px; color:var(--dim); text-align:center; padding:18px 0; }
+  .smodal-btn { display:block; width:100%; padding:11px; border-radius:12px;
+    background:rgba(255,47,214,.12); border:1px solid rgba(255,47,214,.35);
+    color:var(--neon); font-size:13.5px; font-weight:700; cursor:pointer;
+    text-align:center; margin-top:10px; }
+  .smodal-btn:hover { background:rgba(255,47,214,.22); }
+  .sfield { width:100%; background:rgba(255,255,255,.06); border:1px solid rgba(255,255,255,.12);
+    border-radius:10px; padding:10px 13px; color:#fff; font-size:14px;
+    outline:none; box-sizing:border-box; margin-bottom:10px; }
+  .sfield:focus { border-color:rgba(255,47,214,.6); }
+  .sfield-label { font-size:12px; color:var(--dim); margin-bottom:5px; display:block; }
+  .smsg { font-size:13px; border-radius:8px; padding:9px 12px; margin-bottom:10px;
+    display:none; }
+  .smsg.ok { background:rgba(0,220,120,.12); border:1px solid rgba(0,220,.5);
+    color:#00dc78; display:block; }
+  .smsg.err { background:rgba(255,60,60,.12); border:1px solid rgba(255,60,60,.4);
+    color:#ff7070; display:block; }
 </style></head>
-<body><div class="wrap">
+<body>
+
+<!-- Settings modal -->
+<div class="smodal-overlay" id="settingsOverlay" onclick="if(event.target===this)closeSettings()">
+  <div class="smodal">
+    <div class="smodal-head">
+      <h2>⚙️ Account Settings</h2>
+      <button class="smodal-close" onclick="closeSettings()">✕</button>
+    </div>
+    <div class="stabs">
+      <button class="stab active" onclick="switchTab('passkeys')">🔑 Passkeys</button>
+      <button class="stab" onclick="switchTab('security')">🔒 Security</button>
+    </div>
+
+    <!-- Passkeys tab -->
+    <div class="spanel active" id="tab-passkeys">
+      <div class="smodal-sect">
+        <p class="smodal-sect-title">Your saved passkeys</p>
+        <div id="pkList"><div class="pk-empty">Loading…</div></div>
+      </div>
+      <button class="smodal-btn" onclick="addPasskeyFromSettings()">＋ Add new passkey</button>
+      <div class="smsg" id="pkMsg"></div>
+    </div>
+
+    <!-- Security tab -->
+    <div class="spanel" id="tab-security">
+      <div class="smodal-sect">
+        <p class="smodal-sect-title">Change password</p>
+        <div class="smsg" id="pwMsg"></div>
+        <label class="sfield-label">Current password</label>
+        <input class="sfield" type="password" id="pwCur" autocomplete="current-password" placeholder="••••••••">
+        <label class="sfield-label">New password</label>
+        <input class="sfield" type="password" id="pwNew" autocomplete="new-password" placeholder="••••••••">
+        <label class="sfield-label">Confirm new password</label>
+        <input class="sfield" type="password" id="pwConf" autocomplete="new-password" placeholder="••••••••">
+        <button class="smodal-btn" onclick="changePassword()">Update password</button>
+      </div>
+    </div>
+  </div>
+</div>
+
+<div class="wrap">
   <div class="top">
     <div class="logo">🎮</div>
     <div><h1>The Squad</h1><p class="tag">PSN · Live</p></div>
@@ -2775,38 +2960,111 @@ function _fromB64url(s){
   const pad='='.repeat((4-s.length%4)%4);
   return Uint8Array.from(atob((s+pad).replace(/-/g,'+').replace(/_/g,'/')),c=>c.charCodeAt(0)).buffer;
 }
+async function _doRegisterPasskey(onSuccess) {
+  if(!window.PublicKeyCredential) throw new Error('Passkeys not supported in this browser');
+  const br = await fetch('/auth/passkey/register/begin',{method:'POST'});
+  if(!br.ok) throw new Error((await br.json()).error || 'Failed to start');
+  const {passkeyId, options} = await br.json();
+
+  options.challenge = _fromB64url(options.challenge);
+  options.user.id   = _fromB64url(options.user.id);
+  if(options.excludeCredentials)
+    options.excludeCredentials = options.excludeCredentials.map(c=>({...c,id:_fromB64url(c.id)}));
+
+  const cred = await navigator.credentials.create({publicKey: options});
+  const credential = {
+    id: cred.id, rawId: _b64url(cred.rawId), type: cred.type,
+    response: {
+      clientDataJSON:   _b64url(cred.response.clientDataJSON),
+      attestationObject:_b64url(cred.response.attestationObject),
+    },
+  };
+  const passkeyName = (navigator.userAgentData?.platform || navigator.platform || 'Device') + ' passkey';
+  const cr = await fetch('/auth/passkey/register/complete',{
+    method:'POST', headers:{'Content-Type':'application/json'},
+    body: JSON.stringify({passkeyId, credential, passkeyName}),
+  });
+  if(!cr.ok) throw new Error('Registration failed');
+  if(onSuccess) onSuccess();
+}
+
+// Legacy shortcut (called from old spots if any)
 async function registerPasskey(){
-  if(!window.PublicKeyCredential){ toast('Passkeys not supported in this browser'); return; }
   $('userMenu')?.classList.remove('open');
-  toast('Starting passkey setup…');
+  try { await _doRegisterPasskey(); toast('🔑 Passkey added!'); }
+  catch(e){ if(e.name!=='NotAllowedError') toast('Error: '+e.message); }
+}
+
+// ── Settings modal ─────────────────────────────────────────────────────────
+function openSettings(){
+  $('userMenu')?.classList.remove('open');
+  $('settingsOverlay').classList.add('open');
+  loadPasskeys();
+}
+function closeSettings(){ $('settingsOverlay').classList.remove('open'); }
+
+function switchTab(name){
+  document.querySelectorAll('.stab').forEach((t,i)=>{
+    const names=['passkeys','security'];
+    t.classList.toggle('active', names[i]===name);
+  });
+  document.querySelectorAll('.spanel').forEach(p=>{
+    p.classList.toggle('active', p.id==='tab-'+name);
+  });
+}
+
+function _pkMsg(msg, type){ const el=$('pkMsg'); el.className='smsg '+type; el.textContent=msg; }
+function _pwMsg(msg, type){ const el=$('pwMsg'); el.className='smsg '+type; el.textContent=msg; }
+
+async function loadPasskeys(){
+  const el=$('pkList'); el.innerHTML='<div class="pk-empty">Loading…</div>';
   try {
-    const br = await fetch('/auth/passkey/register/begin',{method:'POST'});
-    if(!br.ok){ toast('Setup failed: '+(await br.json()).error); return; }
-    const {passkeyId, options} = await br.json();
+    const r = await fetch('/auth/settings/passkeys');
+    if(!r.ok){ el.innerHTML='<div class="pk-empty">Could not load passkeys.</div>'; return; }
+    const {passkeys} = await r.json();
+    if(!passkeys || !passkeys.length){ el.innerHTML='<div class="pk-empty">No passkeys yet.</div>'; return; }
+    el.innerHTML = passkeys.map(pk => {
+      const dt = pk.changeDate ? new Date(pk.changeDate).toLocaleDateString() : '';
+      return `<div class="pk-row">
+        <div class="pk-info">
+          <span class="pk-name">${pk.name||'Passkey'}</span>
+          ${dt?`<span class="pk-date">Added ${dt}</span>`:''}
+        </div>
+        <button class="pk-del" onclick="deletePasskey('${pk.id}')">Remove</button>
+      </div>`;
+    }).join('');
+  } catch(e){ el.innerHTML='<div class="pk-empty">Error loading passkeys.</div>'; }
+}
 
-    options.challenge = _fromB64url(options.challenge);
-    options.user.id   = _fromB64url(options.user.id);
-    if(options.excludeCredentials)
-      options.excludeCredentials = options.excludeCredentials.map(c=>({...c,id:_fromB64url(c.id)}));
+async function deletePasskey(id){
+  if(!confirm('Remove this passkey?')) return;
+  const r = await fetch('/auth/settings/passkeys/'+id, {method:'DELETE'});
+  if(r.ok){ _pkMsg('Passkey removed.','ok'); loadPasskeys(); }
+  else { _pkMsg('Could not remove passkey.','err'); }
+}
 
-    const cred = await navigator.credentials.create({publicKey: options});
-    const credential = {
-      id: cred.id, rawId: _b64url(cred.rawId), type: cred.type,
-      response: {
-        clientDataJSON:   _b64url(cred.response.clientDataJSON),
-        attestationObject:_b64url(cred.response.attestationObject),
-      },
-    };
-
-    const passkeyName = (navigator.userAgentData?.platform || navigator.platform || 'Device') + ' passkey';
-    const cr = await fetch('/auth/passkey/register/complete',{
-      method:'POST', headers:{'Content-Type':'application/json'},
-      body: JSON.stringify({passkeyId, credential, passkeyName}),
-    });
-    toast(cr.ok ? '🔑 Passkey added! Use it next time you sign in.' : 'Registration failed');
+async function addPasskeyFromSettings(){
+  _pkMsg('','');
+  try {
+    await _doRegisterPasskey(()=>{ _pkMsg('Passkey added!','ok'); loadPasskeys(); });
   } catch(e){
-    if(e.name !== 'NotAllowedError') toast('Passkey error: '+e.message);
+    if(e.name!=='NotAllowedError') _pkMsg('Error: '+e.message,'err');
   }
+}
+
+async function changePassword(){
+  _pwMsg('','');
+  const cur=$('pwCur').value, nw=$('pwNew').value, conf=$('pwConf').value;
+  if(!cur||!nw){ _pwMsg('Fill in all fields.','err'); return; }
+  if(nw!==conf){ _pwMsg('New passwords do not match.','err'); return; }
+  if(nw.length<8){ _pwMsg('Password must be at least 8 characters.','err'); return; }
+  const r = await fetch('/auth/settings/password',{
+    method:'POST', headers:{'Content-Type':'application/json'},
+    body: JSON.stringify({currentPassword:cur, newPassword:nw}),
+  });
+  const d = await r.json();
+  if(r.ok){ _pwMsg('Password updated!','ok'); $('pwCur').value=''; $('pwNew').value=''; $('pwConf').value=''; }
+  else { _pwMsg(d.error||'Failed to update password.','err'); }
 }
 </script>
 </body></html>"""
