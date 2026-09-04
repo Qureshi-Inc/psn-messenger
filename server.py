@@ -581,7 +581,8 @@ _OIDC_CONFIG_CACHE: dict = {}
 # The only public hostname; bare IPs from the tailnet/LAN bypass auth.
 _PUBLIC_HOST = os.environ.get("PORTAL_PUBLIC_HOST", "psn.crcmz.me")
 # Paths that must be reachable before authentication.
-_OPEN_PATHS = {"/health", "/v2/health", "/auth/login", "/auth/callback", "/auth/logout"}
+_OPEN_PATHS = {"/health", "/v2/health", "/auth/login", "/auth/callback",
+               "/auth/logout", "/auth/passkey/begin", "/auth/passkey/complete"}
 
 
 def _signer() -> _USTS:
@@ -702,6 +703,18 @@ def _login_page(error: str = "", next: str = "/") -> str:
   .btn:hover {{ filter:brightness(1.12); }}
   .btn:active {{ transform:scale(.975); }}
   .btn:disabled {{ opacity:.55; cursor:default; }}
+  .divider {{ display:flex; align-items:center; gap:10px; margin:18px 0 4px;
+    color:#6a5d8a; font-size:12px; font-weight:600; letter-spacing:.5px; }}
+  .divider::before,.divider::after {{ content:""; flex:1; height:1px;
+    background:rgba(255,255,255,.08); }}
+  .btn-passkey {{ display:flex; align-items:center; justify-content:center; gap:9px;
+    width:100%; margin-top:12px; padding:14px; border-radius:14px;
+    border:1px solid rgba(34,230,255,.4); background:rgba(34,230,255,.07);
+    color:#22e6ff; font-size:15px; font-weight:700; cursor:pointer;
+    transition:background .15s, transform .07s; letter-spacing:.3px; }}
+  .btn-passkey:hover {{ background:rgba(34,230,255,.14); }}
+  .btn-passkey:active {{ transform:scale(.975); }}
+  .btn-passkey:disabled {{ opacity:.5; cursor:default; }}
   .msg {{ padding:13px 15px; border-radius:13px; font-size:13.5px;
     margin-bottom:6px; display:flex; gap:10px; align-items:center; line-height:1.45; }}
   .err {{ background:rgba(255,107,139,.12); border:1px solid rgba(255,107,139,.4);
@@ -722,12 +735,83 @@ def _login_page(error: str = "", next: str = "/") -> str:
       placeholder="Your password">
     <button type="submit" class="btn" id="btn">Sign in →</button>
   </form>
+  <div class="divider">or</div>
+  <button class="btn-passkey" id="pkBtn" onclick="passkeyLogin()">🔑 Sign in with Passkey</button>
+  <div id="errmsg"></div>
 </div>
 <script>
+  const params = new URLSearchParams(location.search);
+  const nextUrl = params.get('next') || '/';
+
   document.getElementById('f').addEventListener('submit', () => {{
     const b = document.getElementById('btn');
     b.disabled = true; b.textContent = 'Signing in…';
   }});
+
+  function showErr(msg) {{
+    const el = document.getElementById('errmsg');
+    el.innerHTML = '<div class="msg err" style="margin-top:12px">⚠️ '+msg+'</div>';
+  }}
+
+  function b64url(buf) {{
+    return btoa(String.fromCharCode(...new Uint8Array(buf)))
+      .replace(/\+/g,'-').replace(/\//g,'_').replace(/=/g,'');
+  }}
+  function fromB64url(s) {{
+    const pad = '='.repeat((4-s.length%4)%4);
+    const b64 = (s+pad).replace(/-/g,'+').replace(/_/g,'/');
+    return Uint8Array.from(atob(b64),c=>c.charCodeAt(0)).buffer;
+  }}
+
+  async function passkeyLogin() {{
+    if (!window.PublicKeyCredential) {{ showErr('Passkeys not supported in this browser.'); return; }}
+    const identifier = document.getElementById('em').value.trim();
+    if (!identifier) {{ showErr('Enter your email or username first.'); return; }}
+    const btn = document.getElementById('pkBtn');
+    btn.disabled = true; btn.textContent = '🔑 Waiting for passkey…';
+    try {{
+      // 1. Get challenge
+      const br = await fetch('/auth/passkey/begin',{{
+        method:'POST', headers:{{'Content-Type':'application/json'}},
+        body: JSON.stringify({{identifier}})
+      }});
+      if (!br.ok) {{ showErr((await br.json()).error || 'User not found.'); return; }}
+      const {{sessionId, options}} = await br.json();
+
+      // 2. Prep options (base64url → ArrayBuffer)
+      options.challenge = fromB64url(options.challenge);
+      if (options.allowCredentials)
+        options.allowCredentials = options.allowCredentials.map(c=>
+          ({{...c, id: fromB64url(c.id)}}));
+
+      // 3. Browser passkey ceremony
+      const cred = await navigator.credentials.get({{publicKey: options}});
+
+      // 4. Build assertion (ArrayBuffer → base64url)
+      const assertion = {{
+        id: cred.id, rawId: b64url(cred.rawId), type: cred.type,
+        response: {{
+          clientDataJSON:    b64url(cred.response.clientDataJSON),
+          authenticatorData: b64url(cred.response.authenticatorData),
+          signature:         b64url(cred.response.signature),
+          userHandle: cred.response.userHandle ? b64url(cred.response.userHandle) : null,
+        }},
+      }};
+
+      // 5. Verify
+      const cr = await fetch('/auth/passkey/complete?next='+encodeURIComponent(nextUrl),{{
+        method:'POST', headers:{{'Content-Type':'application/json'}},
+        body: JSON.stringify({{sessionId, assertion}})
+      }});
+      if (!cr.ok) {{ showErr((await cr.json()).error || 'Passkey verification failed.'); return; }}
+      const {{next}} = await cr.json();
+      window.location.href = next;
+    }} catch(e) {{
+      if (e.name !== 'NotAllowedError') showErr('Passkey error: '+e.message);
+    }} finally {{
+      btn.disabled = false; btn.textContent = '🔑 Sign in with Passkey';
+    }}
+  }}
 </script>
 </body></html>"""
 
@@ -885,6 +969,110 @@ async def auth_callback(request: Request, code: str = "", state: str = "", error
     resp.set_cookie(_SESSION_COOKIE, _signer().dumps(session), httponly=True, samesite="lax",
                     secure=True, max_age=_SESSION_MAX_AGE, path="/")
     resp.delete_cookie(_OIDC_STATE_COOKIE, path="/")
+    return resp
+
+
+@app.post("/auth/passkey/begin")
+async def passkey_begin(request: Request):
+    """Step 1: resolve user → ask Zitadel for a WebAuthn challenge."""
+    if not ZITADEL_SERVICE_TOKEN:
+        return JSONResponse({"error": "not configured"}, status_code=503)
+    body = await request.json()
+    identifier = (body.get("identifier") or "").strip()
+    if not identifier:
+        return JSONResponse({"error": "identifier required"}, status_code=400)
+
+    import httpx as _hx
+
+    async def _resolve(ident: str) -> str:
+        if "@" not in ident:
+            return ident
+        try:
+            async with _hx.AsyncClient(timeout=10) as c:
+                sr = await c.post(
+                    f"{ZITADEL_ISSUER}/management/v1/users/_search",
+                    json={"queries": [{"emailQuery": {"emailAddress": ident,
+                                                      "method": "TEXT_QUERY_METHOD_EQUALS"}}]},
+                    headers={"Authorization": f"Bearer {ZITADEL_SERVICE_TOKEN}"},
+                )
+            if sr.status_code == 200:
+                results = sr.json().get("result", [])
+                if results:
+                    return results[0].get("preferredLoginName", ident)
+        except Exception:
+            pass
+        return ident
+
+    login_name = await _resolve(identifier)
+    try:
+        async with _hx.AsyncClient(timeout=15) as c:
+            r = await c.post(
+                f"{ZITADEL_ISSUER}/v2/sessions",
+                json={
+                    "checks": {"user": {"loginName": login_name}},
+                    "challenges": {"webAuthN": {
+                        "domain": _PUBLIC_HOST,
+                        "userVerificationRequirement": "USER_VERIFICATION_REQUIREMENT_REQUIRED",
+                    }},
+                },
+                headers={"Authorization": f"Bearer {ZITADEL_SERVICE_TOKEN}"},
+            )
+        if r.status_code not in (200, 201):
+            logger.warning("passkey/begin: %s for loginName=%s", r.status_code, login_name)
+            return JSONResponse({"error": "user not found"}, status_code=404)
+        data = r.json()
+        options = data.get("challenges", {}).get("webAuthN", {}).get("publicKeyCredentialRequestOptions")
+        if not options:
+            return JSONResponse({"error": "no webauthn challenge returned"}, status_code=500)
+        return JSONResponse({"sessionId": data["sessionId"], "options": options})
+    except Exception as e:
+        logger.error("passkey/begin error: %s", e)
+        return JSONResponse({"error": "service unavailable"}, status_code=503)
+
+
+@app.post("/auth/passkey/complete")
+async def passkey_complete(request: Request, next: str = "/"):
+    """Step 2: verify the WebAuthn assertion with Zitadel, set session cookie."""
+    if not ZITADEL_SERVICE_TOKEN:
+        return JSONResponse({"error": "not configured"}, status_code=503)
+    body = await request.json()
+    session_id = (body.get("sessionId") or "").strip()
+    assertion  = body.get("assertion")
+    if not session_id or not assertion:
+        return JSONResponse({"error": "sessionId and assertion required"}, status_code=400)
+
+    import httpx as _hx
+    try:
+        async with _hx.AsyncClient(timeout=15) as c:
+            r = await c.patch(
+                f"{ZITADEL_ISSUER}/v2/sessions/{session_id}",
+                json={"checks": {"webAuthN": {"credentialAssertionData": assertion}}},
+                headers={"Authorization": f"Bearer {ZITADEL_SERVICE_TOKEN}"},
+            )
+        if r.status_code not in (200, 201):
+            logger.warning("passkey/complete: %s for session %s: %s", r.status_code, session_id, r.text[:200])
+            return JSONResponse({"error": "passkey verification failed"}, status_code=401)
+
+        async with _hx.AsyncClient(timeout=10) as c:
+            sr = await c.get(
+                f"{ZITADEL_ISSUER}/v2/sessions/{session_id}",
+                headers={"Authorization": f"Bearer {ZITADEL_SERVICE_TOKEN}"},
+            )
+        user_f     = sr.json().get("session", {}).get("factors", {}).get("user", {})
+        sub        = user_f.get("id", "")
+        user_email = user_f.get("loginName", "")
+    except Exception as e:
+        logger.error("passkey/complete error: %s", e)
+        return JSONResponse({"error": "service unavailable"}, status_code=503)
+
+    if not sub:
+        return JSONResponse({"error": "session invalid"}, status_code=401)
+
+    safe_next = next if next.startswith("/") else "/"
+    session = {"sub": sub, "email": user_email}
+    resp = JSONResponse({"ok": True, "next": safe_next})
+    resp.set_cookie(_SESSION_COOKIE, _signer().dumps(session), httponly=True,
+                    samesite="lax", secure=True, max_age=_SESSION_MAX_AGE, path="/")
     return resp
 
 
