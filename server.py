@@ -80,6 +80,13 @@ class MessageRequest(BaseModel):
     message: str
 
 
+@app.get("/.well-known/webauthn")
+def webauthn_related_origins():
+    """Declare auth.crcmz.me as a related origin so passkeys registered there work here."""
+    issuer_origin = ZITADEL_ISSUER.rstrip("/")
+    return JSONResponse({"origins": [issuer_origin]})
+
+
 @app.get("/health")
 def health():
     return {"status": "ok", "user": client.online_id, "group": GROUP_ID}
@@ -582,7 +589,8 @@ _OIDC_CONFIG_CACHE: dict = {}
 _PUBLIC_HOST = os.environ.get("PORTAL_PUBLIC_HOST", "psn.crcmz.me")
 # Paths that must be reachable before authentication.
 _OPEN_PATHS = {"/health", "/v2/health", "/auth/login", "/auth/callback",
-               "/auth/logout", "/auth/passkey/begin", "/auth/passkey/complete"}
+               "/auth/logout", "/auth/passkey/begin", "/auth/passkey/complete",
+               "/.well-known/webauthn"}
 
 
 def _signer() -> _USTS:
@@ -1098,20 +1106,11 @@ async def passkey_register_begin(request: Request):
             logger.warning("passkey/register/begin: %s %s", r.status_code, r.text[:200])
             return JSONResponse({"error": "failed to initiate"}, status_code=500)
         d = r.json()
-        passkey_id = d.get("passkeyId") or d.get("id", "")
-        code       = d.get("code") or {}
-
-        async with _hx.AsyncClient(timeout=15) as c:
-            r2 = await c.post(
-                f"{ZITADEL_ISSUER}/v2/users/{user_id}/passkeys/{passkey_id}/register",
-                json={"code": code, "domain": _PUBLIC_HOST},
-                headers={"Authorization": f"Bearer {ZITADEL_SERVICE_TOKEN}"},
-            )
-        if r2.status_code not in (200, 201):
-            logger.warning("passkey/register/begin options: %s %s", r2.status_code, r2.text[:200])
-            return JSONResponse({"error": "failed to get options"}, status_code=500)
-
-        options = r2.json().get("publicKeyCredentialCreationOptions")
+        passkey_id = d.get("passkeyId", "")
+        # Options are returned directly in the first call — no second /register step.
+        options = d.get("publicKeyCredentialCreationOptions")
+        if not options:
+            return JSONResponse({"error": "no creation options returned"}, status_code=500)
         return JSONResponse({"passkeyId": passkey_id, "options": options})
     except Exception as e:
         logger.error("passkey/register/begin error: %s", e)
@@ -1134,8 +1133,8 @@ async def passkey_register_complete(request: Request):
     import httpx as _hx
     try:
         async with _hx.AsyncClient(timeout=15) as c:
-            r = await c.post(
-                f"{ZITADEL_ISSUER}/v2/users/{user_id}/passkeys/{passkey_id}/verify",
+            r = await c.put(
+                f"{ZITADEL_ISSUER}/v2/users/{user_id}/passkeys/{passkey_id}",
                 json={"publicKeyCredential": credential},
                 headers={"Authorization": f"Bearer {ZITADEL_SERVICE_TOKEN}"},
             )
