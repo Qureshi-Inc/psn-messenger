@@ -1253,15 +1253,50 @@ async def settings_change_password(request: Request):
         return JSONResponse({"error": "service unavailable"}, status_code=503)
 
 
+_admin_cache: dict[str, tuple[bool, float]] = {}  # user_id → (is_admin, expires_ts)
+
+
+async def _is_iam_admin(user_id: str) -> bool:
+    """Check if user has any IAM role in Zitadel. Result cached for 5 minutes."""
+    import time as _time
+    now = _time.time()
+    cached = _admin_cache.get(user_id)
+    if cached and cached[1] > now:
+        return cached[0]
+    result = False
+    if ZITADEL_SERVICE_TOKEN:
+        import httpx as _hx
+        try:
+            async with _hx.AsyncClient(timeout=8) as c:
+                r = await c.post(
+                    f"{ZITADEL_ISSUER}/admin/v1/members/_search",
+                    json={"queries": [{"userIdQuery": {"userId": user_id}}]},
+                    headers={"Authorization": f"Bearer {ZITADEL_SERVICE_TOKEN}"},
+                )
+            if r.status_code == 200:
+                result = bool(r.json().get("result"))
+        except Exception as e:
+            logger.warning("admin check failed for %s: %s", user_id, e)
+    _admin_cache[user_id] = (result, now + 300)
+    return result
+
+
 @app.get("/auth/settings/psn")
 async def settings_psn_status(request: Request):
-    """Return the PSN link status for the currently logged-in user, plus any unclaimed records."""
+    """PSN status for the logged-in user. Admins see all accounts."""
     session = _get_session(request)
     if not session:
         return JSONResponse({"error": "not authenticated"}, status_code=401)
     user_id = session.get("sub", "")
     if not user_id:
         return JSONResponse({"linked": False, "unclaimed": []})
+
+    is_admin = await _is_iam_admin(user_id)
+
+    if is_admin:
+        all_users = portal_mod.list_users()
+        return JSONResponse({"admin": True, "users": all_users})
+
     record = portal_mod.find_by_zitadel_id(user_id)
     if record:
         return JSONResponse({"linked": True, **record})
@@ -3078,6 +3113,33 @@ async function loadPsnStatus(){
   try {
     const r = await fetch('/auth/settings/psn');
     const d = await r.json();
+
+    // ── Admin view ────────────────────────────────────────────────────
+    if(d.admin){
+      const users = d.users || [];
+      if(!users.length){ el.innerHTML='<span style="color:var(--dim)">No PSN accounts registered yet.</span>'; return; }
+      el.innerHTML = users.map(u => {
+        const expiry = u.refresh_expires_at ? new Date(u.refresh_expires_at*1000) : null;
+        const expired = expiry && expiry < new Date();
+        const claimed = !!u.zitadel_user_id;
+        const dt = u.linked_at ? new Date(u.linked_at*1000).toLocaleDateString() : '';
+        return `<div class="pk-row" style="margin-bottom:8px">
+          <div class="pk-info">
+            <span class="pk-name">${u.online_id||u.mm_username||'Unknown'}</span>
+            <span class="pk-date">${dt ? 'Linked '+dt : ''}${claimed ? ' · claimed' : ' · unclaimed'}</span>
+          </div>
+          <span style="font-size:11px;padding:3px 8px;border-radius:20px;font-weight:700;white-space:nowrap;
+            background:${expired?'rgba(255,60,60,.15)':'rgba(0,220,120,.12)'};
+            color:${expired?'#ff6060':'#00dc78'};
+            border:1px solid ${expired?'rgba(255,60,60,.3)':'rgba(0,220,120,.3)'}">
+            ${expired?'Expired':'Active'}
+          </span>
+        </div>`;
+      }).join('');
+      return;
+    }
+
+    // ── Linked user view ──────────────────────────────────────────────
     if(d.linked){
       const linked = d.linked_at ? new Date(d.linked_at*1000).toLocaleDateString() : null;
       const expiry = d.refresh_expires_at ? new Date(d.refresh_expires_at*1000) : null;
@@ -3096,16 +3158,19 @@ async function loadPsnStatus(){
             ${expired?'Expired':'Active'}
           </span>
         </div>
-        ${expired?'<div style="font-size:12.5px;color:#ff9060;margin-bottom:10px">⚠️ Your PSN token has expired. Re-link to refresh it.</div>':''}`;
+        ${expired?'<div style="font-size:12.5px;color:#ff9060;margin-bottom:10px">⚠️ Token expired — re-link to refresh.</div>':''}`;
       return;
     }
-    // Not linked — show unclaimed accounts to claim, or prompt to link fresh
+
+    // ── Unlinked user — show only unclaimed accounts to claim ─────────
     const unclaimed = d.unclaimed || [];
-    let html = '';
-    if(unclaimed.length){
-      html += `<p style="font-size:12.5px;color:var(--dim);margin:0 0 12px">
-        Select your existing PSN account below, or link a new one.</p>`;
-      html += unclaimed.map(u => {
+    if(!unclaimed.length){
+      el.innerHTML='<span style="color:var(--dim);font-size:13.5px">No unassigned PSN accounts found.<br>Use the button below to link yours.</span>';
+      return;
+    }
+    el.innerHTML =
+      `<p style="font-size:12.5px;color:var(--dim);margin:0 0 12px">Is one of these yours? Tap to claim it.</p>` +
+      unclaimed.map(u => {
         const dt = u.linked_at ? new Date(u.linked_at*1000).toLocaleDateString() : '';
         return `<div class="pk-row" style="margin-bottom:8px">
           <div class="pk-info">
@@ -3116,15 +3181,11 @@ async function loadPsnStatus(){
             onclick="claimPsn('${u.key}','${u.online_id||u.mm_username||''}')">This is mine</button>
         </div>`;
       }).join('');
-    } else {
-      html = '<span style="color:var(--dim);font-size:13.5px">No PlayStation account linked yet.</span>';
-    }
-    el.innerHTML = html;
   } catch(e){ el.innerHTML='<span style="color:#ff7070">Could not load PSN status.</span>'; }
 }
 
 async function claimPsn(key, name){
-  if(!confirm(`Claim "${name}" as your PlayStation account?`)) return;
+  if(!confirm('Claim "'+name+'" as your PlayStation account?')) return;
   const r = await fetch('/auth/settings/psn/claim',{
     method:'POST', headers:{'Content-Type':'application/json'},
     body: JSON.stringify({key}),
