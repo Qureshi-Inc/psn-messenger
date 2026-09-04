@@ -3418,7 +3418,7 @@ _DASHBOARD_TMPL = r"""<!doctype html>
         <button class="wa-rb" data-r="prev_month" onclick="waSetRange(this)">Prev Month</button>
         <button class="wa-rb" data-r="custom" onclick="waSetRange(this)">Custom</button>
       </div>
-      <div id="waCustomRange" style="display:none;display:flex;gap:8px;margin-top:8px;flex-wrap:wrap">
+      <div id="waCustomRange" style="display:none;gap:8px;margin-top:8px;flex-wrap:wrap">
         <input type="date" id="waStart" class="wa-date-in" onchange="waReload()">
         <span style="color:var(--dim);line-height:38px">→</span>
         <input type="date" id="waEnd" class="wa-date-in" onchange="waReload()">
