@@ -1292,16 +1292,23 @@ async def settings_psn_status(request: Request):
         return JSONResponse({"linked": False, "unclaimed": []})
 
     is_admin = await _is_iam_admin(user_id)
-
-    if is_admin:
-        all_users = portal_mod.list_users()
-        return JSONResponse({"admin": True, "users": all_users})
-
     record = portal_mod.find_by_zitadel_id(user_id)
+    all_users = portal_mod.list_users() if is_admin else None
+
     if record:
-        return JSONResponse({"linked": True, **record})
+        base = {"linked": True, **record}
+        if is_admin:
+            base["admin"] = True
+            base["users"] = all_users
+        return JSONResponse(base)
+
+    # Not yet claimed — everyone sees unclaimed list to pick from
     unclaimed = portal_mod.list_unclaimed()
-    return JSONResponse({"linked": False, "unclaimed": unclaimed})
+    resp: dict = {"linked": False, "unclaimed": unclaimed}
+    if is_admin:
+        resp["admin"] = True
+        resp["users"] = all_users
+    return JSONResponse(resp)
 
 
 @app.post("/auth/settings/psn/claim")
@@ -3114,37 +3121,12 @@ async function loadPsnStatus(){
     const r = await fetch('/auth/settings/psn');
     const d = await r.json();
 
-    // ── Admin view ────────────────────────────────────────────────────
-    if(d.admin){
-      const users = d.users || [];
-      if(!users.length){ el.innerHTML='<span style="color:var(--dim)">No PSN accounts registered yet.</span>'; return; }
-      el.innerHTML = users.map(u => {
-        const expiry = u.refresh_expires_at ? new Date(u.refresh_expires_at*1000) : null;
-        const expired = expiry && expiry < new Date();
-        const claimed = !!u.zitadel_user_id;
-        const dt = u.linked_at ? new Date(u.linked_at*1000).toLocaleDateString() : '';
-        return `<div class="pk-row" style="margin-bottom:8px">
-          <div class="pk-info">
-            <span class="pk-name">${u.online_id||u.mm_username||'Unknown'}</span>
-            <span class="pk-date">${dt ? 'Linked '+dt : ''}${claimed ? ' · claimed' : ' · unclaimed'}</span>
-          </div>
-          <span style="font-size:11px;padding:3px 8px;border-radius:20px;font-weight:700;white-space:nowrap;
-            background:${expired?'rgba(255,60,60,.15)':'rgba(0,220,120,.12)'};
-            color:${expired?'#ff6060':'#00dc78'};
-            border:1px solid ${expired?'rgba(255,60,60,.3)':'rgba(0,220,120,.3)'}">
-            ${expired?'Expired':'Active'}
-          </span>
-        </div>`;
-      }).join('');
-      return;
-    }
-
-    // ── Linked user view ──────────────────────────────────────────────
+    // ── My account (everyone including admin, once claimed) ───────────
     if(d.linked){
       const linked = d.linked_at ? new Date(d.linked_at*1000).toLocaleDateString() : null;
       const expiry = d.refresh_expires_at ? new Date(d.refresh_expires_at*1000) : null;
       const expired = expiry && expiry < new Date();
-      el.innerHTML =
+      let html =
         `<div style="display:flex;align-items:center;gap:10px;margin-bottom:14px">
           <span style="font-size:28px">🎮</span>
           <div>
@@ -3159,18 +3141,20 @@ async function loadPsnStatus(){
           </span>
         </div>
         ${expired?'<div style="font-size:12.5px;color:#ff9060;margin-bottom:10px">⚠️ Token expired — re-link to refresh.</div>':''}`;
+      // Admin: also show all accounts below
+      if(d.admin && d.users && d.users.length){
+        html += _adminUsersHtml(d.users);
+      }
+      el.innerHTML = html;
       return;
     }
 
-    // ── Unlinked user — show only unclaimed accounts to claim ─────────
+    // ── Not yet claimed — show unclaimed list ─────────────────────────
     const unclaimed = d.unclaimed || [];
-    if(!unclaimed.length){
-      el.innerHTML='<span style="color:var(--dim);font-size:13.5px">No unassigned PSN accounts found.<br>Use the button below to link yours.</span>';
-      return;
-    }
-    el.innerHTML =
-      `<p style="font-size:12.5px;color:var(--dim);margin:0 0 12px">Is one of these yours? Tap to claim it.</p>` +
-      unclaimed.map(u => {
+    let html = '';
+    if(unclaimed.length){
+      html += `<p style="font-size:12.5px;color:var(--dim);margin:0 0 12px">Is one of these yours? Tap to claim it.</p>`;
+      html += unclaimed.map(u => {
         const dt = u.linked_at ? new Date(u.linked_at*1000).toLocaleDateString() : '';
         return `<div class="pk-row" style="margin-bottom:8px">
           <div class="pk-info">
@@ -3181,7 +3165,39 @@ async function loadPsnStatus(){
             onclick="claimPsn('${u.key}','${u.online_id||u.mm_username||''}')">This is mine</button>
         </div>`;
       }).join('');
+    } else {
+      html = '<span style="color:var(--dim);font-size:13.5px">No unassigned accounts found.<br>Use the button below to link a new one.</span>';
+    }
+    // Admin: also show full list below the claim section
+    if(d.admin && d.users && d.users.length){
+      html += _adminUsersHtml(d.users);
+    }
+    el.innerHTML = html;
   } catch(e){ el.innerHTML='<span style="color:#ff7070">Could not load PSN status.</span>'; }
+}
+
+function _adminUsersHtml(users){
+  if(!users.length) return '';
+  return `<div style="margin-top:18px;padding-top:14px;border-top:1px solid rgba(255,255,255,.07)">
+    <p style="font-size:11px;color:var(--dim);text-transform:uppercase;letter-spacing:1px;margin:0 0 10px">All accounts</p>` +
+    users.map(u => {
+      const expiry = u.refresh_expires_at ? new Date(u.refresh_expires_at*1000) : null;
+      const expired = expiry && expiry < new Date();
+      const claimed = !!u.zitadel_user_id;
+      const dt = u.linked_at ? new Date(u.linked_at*1000).toLocaleDateString() : '';
+      return `<div class="pk-row" style="margin-bottom:8px">
+        <div class="pk-info">
+          <span class="pk-name">${u.online_id||u.mm_username||'Unknown'}</span>
+          <span class="pk-date">${dt?'Linked '+dt:''}${claimed?' · claimed':' · unclaimed'}</span>
+        </div>
+        <span style="font-size:11px;padding:3px 8px;border-radius:20px;font-weight:700;white-space:nowrap;
+          background:${expired?'rgba(255,60,60,.15)':'rgba(0,220,120,.12)'};
+          color:${expired?'#ff6060':'#00dc78'};
+          border:1px solid ${expired?'rgba(255,60,60,.3)':'rgba(0,220,120,.3)'}">
+          ${expired?'Expired':'Active'}
+        </span>
+      </div>`;
+    }).join('') + `</div>`;
 }
 
 async function claimPsn(key, name){
