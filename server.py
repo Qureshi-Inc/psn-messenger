@@ -557,7 +557,7 @@ def _portal_page(error: str = "", ok: str = "") -> str:
 <div class="grain"></div>
 <div class="card">
   <div class="brand">
-    <div class="logo"><img src="/footer-avatar.png" alt="CRCMZ" style="width:100%;height:100%;object-fit:cover;object-position:center 20%;display:block;"></div>
+    <div class="logo"><img src="/footer-avatar.png" alt="CRCMZ" style="width:100%;height:100%;object-fit:cover;object-position:50% 0%;display:block;"></div>
     <div><h1>Link your PlayStation</h1>
       <p class="tag">One quick setup — then never again.</p></div>
   </div>
@@ -804,7 +804,7 @@ def _login_page(error: str = "", next: str = "/") -> str:
 </style></head>
 <body><div class="card">
   <div class="brand">
-    <div class="logo"><img src="/footer-avatar.png" alt="CRCMZ" style="width:100%;height:100%;object-fit:cover;object-position:center 20%;display:block;"></div>
+    <div class="logo"><img src="/footer-avatar.png" alt="CRCMZ" style="width:100%;height:100%;object-fit:cover;object-position:50% 0%;display:block;"></div>
     <div><h1>CRCMZ APP</h1><p class="sub">Yes. We have one.</p></div>
   </div>
   {err_html}
@@ -2734,6 +2734,17 @@ _DASHBOARD_TMPL = r"""<!doctype html>
     background-size:40px 40px, 40px 40px; }
   .wrap { max-width:760px; margin:0 auto; padding:0 14px; }
 
+  .announce {
+    width:100%; overflow:hidden; text-align:center;
+    font-size:12px; font-family:"Orbitron",sans-serif; letter-spacing:.5px;
+    color:var(--lime); background:rgba(140,255,43,.07);
+    border-bottom:1px solid rgba(140,255,43,.15);
+    max-height:36px; padding:9px 16px;
+    transition:max-height .4s ease, padding .4s ease, opacity .35s ease;
+    opacity:1; }
+  .announce.empty { max-height:0; padding:0; opacity:0; border-bottom-color:transparent; }
+  .announce b { font-size:13px; }
+
   .top { display:flex; align-items:center; gap:13px; padding:20px 2px 14px; }
   .logo { width:60px; height:60px; border-radius:14px; flex:none; display:grid;
     place-items:center; font-size:25px; overflow:hidden;
@@ -2747,11 +2758,6 @@ _DASHBOARD_TMPL = r"""<!doctype html>
     text-shadow:0 0 18px rgba(255,47,214,.35); }
   .tag { color:var(--dim); font-size:12px; margin:3px 0 0; letter-spacing:1px;
     text-transform:uppercase; }
-  .top .live { display:none; }
-  .live { font-size:12px; color:var(--dim);
-    text-transform:uppercase; letter-spacing:.5px; }
-  .live b { color:var(--lime); font-size:14px; font-family:"Orbitron",sans-serif;
-    text-shadow:0 0 10px rgba(140,255,43,.5); }
 
   /* ── Chat Board (sticky bottom) ── */
   .board-wrap { position:fixed; left:0; right:0; bottom:0; z-index:30;
@@ -3368,9 +3374,10 @@ _DASHBOARD_TMPL = r"""<!doctype html>
   </div>
 </div>
 
+<div class="announce empty" id="livecount"></div>
 <div class="wrap">
   <div class="top">
-    <div class="logo"><img src="/footer-avatar.png" alt="CRCMZ" style="width:100%;height:100%;object-fit:cover;object-position:center 20%;display:block;"></div>
+    <div class="logo"><img src="/footer-avatar.png" alt="CRCMZ" style="width:100%;height:100%;object-fit:cover;object-position:50% 0%;display:block;"></div>
     <div><h1>CRCMZ APP</h1><p class="tag">Yes. We have one.</p></div>
     <div style="margin-left:auto">
       <div style="position:relative">__USER__</div>
@@ -3404,7 +3411,6 @@ _DASHBOARD_TMPL = r"""<!doctype html>
       </div>
       <div class="hype-track"><div class="hype-fill dead" id="hypeFill"></div></div>
     </div>
-    <div class="live" id="livecount" style="margin-bottom:8px"></div>
     <div class="statgrid" id="statgrid"></div>
     <div class="card" id="squad"><div class="spin">Loading squad…</div></div>
     <p class="pip-title" style="margin:18px 0 8px">🏆 Ranks</p>
@@ -3849,7 +3855,9 @@ async function loadSquad(){
     const mod = squad.find(m=>(m.online_id||'').toLowerCase()==='crcmz-mod');
     if (mod?.avatar) MOD_AVATAR = mod.avatar;
     const playing=squad.filter(m=>m.playing).length;
-    $('livecount').innerHTML = playing ? ('<b>'+playing+'</b> 🎮 in a game') : 'nobody in a game';
+    const lc = $('livecount');
+    if(playing){ lc.innerHTML='<b>'+playing+'</b> in a game right now 🎮'; lc.classList.remove('empty'); }
+    else { lc.innerHTML=''; lc.classList.add('empty'); }
     // On-a-game members float to the top.
     squad.sort((a,b)=> (b.playing?1:0)-(a.playing?1:0));
     renderTogether(); renderStats(); renderSquad(); renderBoard();
