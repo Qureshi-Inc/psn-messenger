@@ -230,7 +230,20 @@ def link_user(raw_npsso: str, mm_username: str = "", zitadel_user_id: str = "") 
     }
 
     USERS_DIR.mkdir(parents=True, exist_ok=True)
-    (USERS_DIR / f"{key}.json").write_text(json.dumps(record, indent=2))
+    new_file = USERS_DIR / f"{key}.json"
+    # Remove any stale files for the same PSN account_id (avoids squad duplicates)
+    if account_id:
+        for f in USERS_DIR.glob("*.json"):
+            if f == new_file:
+                continue
+            try:
+                d = json.loads(f.read_text())
+                if str(d.get("account_id")) == str(account_id):
+                    logger.info("portal: removing stale duplicate %s for account_id=%s", f.name, account_id)
+                    f.unlink()
+            except Exception:
+                pass
+    new_file.write_text(json.dumps(record, indent=2))
     logger.info(
         "portal: linked zitadel=%s mm=%s online_id=%s account_id=%s",
         zitadel_user_id or "-",

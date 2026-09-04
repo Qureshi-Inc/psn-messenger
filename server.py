@@ -2654,7 +2654,7 @@ _DASHBOARD_TMPL = r"""<!doctype html>
     text-overflow:ellipsis; font-family:"Rajdhani",sans-serif;
     font-size:clamp(11px,3vw,13px); font-weight:700; letter-spacing:.5px;
     text-transform:uppercase; transition:background .15s,color .15s,box-shadow .15s; }
-  .tab-icon { display:none; }
+  .tab-icon { display:inline; font-size:14px; line-height:1; margin-right:4px; }
   .tab.on { background:linear-gradient(135deg,var(--neon),var(--violet)); color:#fff;
     box-shadow:0 0 16px rgba(255,47,214,.5); }
   .panel { display:none; } .panel.on { display:block; animation:fade .3s ease both; }

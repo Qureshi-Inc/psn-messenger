@@ -81,7 +81,18 @@ def linked_accounts() -> list[dict]:
                     "_file": str(f),
                 }
             )
-    return out
+    # Deduplicate by account_id — prefer Zitadel-keyed (z-) files over old MM entries
+    seen: dict[str, dict] = {}
+    for entry in out:
+        aid = entry["account_id"]
+        prev = seen.get(aid)
+        if prev is None:
+            seen[aid] = entry
+        else:
+            prefer_new = Path(entry["_file"]).name.startswith("z-") and not Path(prev["_file"]).name.startswith("z-")
+            if prefer_new:
+                seen[aid] = entry
+    return list(seen.values())
 
 
 def _user_token(account: dict) -> str | None:
