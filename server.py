@@ -1130,15 +1130,16 @@ async def passkey_register_complete(request: Request):
     body = await request.json()
     passkey_id = body.get("passkeyId", "")
     credential = body.get("credential")
+    passkey_name = (body.get("passkeyName") or "My passkey")[:200]
     if not user_id or not passkey_id or not credential:
         return JSONResponse({"error": "missing fields"}, status_code=400)
 
     import httpx as _hx
     try:
         async with _hx.AsyncClient(timeout=15) as c:
-            r = await c.put(
+            r = await c.post(
                 f"{ZITADEL_ISSUER}/v2/users/{user_id}/passkeys/{passkey_id}",
-                json={"publicKeyCredential": credential},
+                json={"passkeyName": passkey_name, "publicKeyCredential": credential},
                 headers={"Authorization": f"Bearer {ZITADEL_SERVICE_TOKEN}"},
             )
         if r.status_code not in (200, 201):
@@ -2795,9 +2796,10 @@ async function registerPasskey(){
       },
     };
 
+    const passkeyName = (navigator.userAgentData?.platform || navigator.platform || 'Device') + ' passkey';
     const cr = await fetch('/auth/passkey/register/complete',{
       method:'POST', headers:{'Content-Type':'application/json'},
-      body: JSON.stringify({passkeyId, credential}),
+      body: JSON.stringify({passkeyId, credential, passkeyName}),
     });
     toast(cr.ok ? '🔑 Passkey added! Use it next time you sign in.' : 'Registration failed');
   } catch(e){
