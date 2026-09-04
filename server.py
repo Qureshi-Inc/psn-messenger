@@ -2295,7 +2295,10 @@ def _dashboard_html(user_email: str = "") -> str:
     if user_email:
         disp = user_email.split("@")[0] if "@" in user_email else user_email
         user_html = (
-            '<button class="user-btn" id="userBtn" onclick="toggleUserMenu()" aria-label="Account">👤</button>'
+            '<button class="user-btn" id="userBtn" onclick="toggleUserMenu()" aria-label="Account">'
+            '<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">'
+            '<circle cx="12" cy="8" r="4"/><path d="M4 20c0-4 3.6-7 8-7s8 3 8 7"/>'
+            '</svg></button>'
             '<div class="user-drop" id="userMenu">'
             f'<div class="ud-name">{disp}</div>'
             '<button class="ud-item" style="width:100%;border:none;cursor:pointer;margin-bottom:6px" onclick="openSettings()">⚙️ Settings</button>'
@@ -2582,10 +2585,15 @@ _DASHBOARD_TMPL = r"""<!doctype html>
     flex:none; white-space:nowrap; }
   .cage { color:var(--dim); font-size:11px; flex:none; margin-left:auto; }
 
-  .user-btn { width:36px; height:36px; border-radius:50%; border:1.5px solid rgba(255,47,214,.5);
-    background:rgba(255,47,214,.1); color:var(--neon); font-size:17px; cursor:pointer;
-    display:grid; place-items:center; flex:none; padding:0; }
-  .user-btn:active { background:rgba(255,47,214,.22); }
+  .user-btn { width:38px; height:38px; border-radius:50%;
+    border:1.5px solid rgba(255,47,214,.7);
+    background:linear-gradient(135deg,rgba(255,47,214,.25),rgba(157,92,255,.25));
+    box-shadow:0 0 12px rgba(255,47,214,.35), inset 0 1px 0 rgba(255,255,255,.1);
+    color:#ff2fd6; cursor:pointer;
+    display:grid; place-items:center; flex:none; padding:0;
+    transition:box-shadow .15s, transform .1s; }
+  .user-btn:hover { box-shadow:0 0 20px rgba(255,47,214,.6), inset 0 1px 0 rgba(255,255,255,.15); }
+  .user-btn:active { transform:scale(.93); }
   .user-drop { position:absolute; top:calc(100% + 10px); right:0; min-width:150px;
     background:rgba(12,6,26,.97); border:1px solid rgba(255,47,214,.35); border-radius:14px;
     padding:8px; backdrop-filter:blur(20px); -webkit-backdrop-filter:blur(20px);
