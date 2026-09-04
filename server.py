@@ -2835,19 +2835,96 @@ _DASHBOARD_TMPL = r"""<!doctype html>
   .snd.add { background:rgba(255,255,255,.03); border:1.5px dashed rgba(255,47,214,.5);
     color:#ff9ee8; box-shadow:none; }
 
-  .tabs { display:flex; gap:6px; background:var(--card); border:1px solid var(--line);
-    padding:5px; border-radius:16px; margin:14px 0; backdrop-filter:blur(18px);
-    -webkit-backdrop-filter:blur(18px); }
-  .tab { flex:1; text-align:center; padding:10px 4px; border-radius:11px; border:none;
-    background:none; color:var(--dim); cursor:pointer; white-space:nowrap; overflow:hidden;
-    text-overflow:ellipsis; font-family:"Rajdhani",sans-serif;
-    font-size:clamp(11px,3vw,13px); font-weight:700; letter-spacing:.5px;
-    text-transform:uppercase; transition:background .15s,color .15s,box-shadow .15s; }
-  .tab-icon { display:inline; font-size:14px; line-height:1; margin-right:4px; }
-  .tab.on { background:linear-gradient(135deg,var(--neon),var(--violet)); color:#fff;
-    box-shadow:0 0 16px rgba(255,47,214,.5); }
-  .panel { display:none; } .panel.on { display:block; animation:fade .3s ease both; }
-  @keyframes fade { from { opacity:0; transform:translateY(6px); } }
+  /* ── Liquid Nav ─────────────────────────────────────────────── */
+  .nav-wrap { position:relative; margin:14px 0; z-index:200; }
+
+  .nav-trigger {
+    width:100%; display:flex; align-items:center; gap:12px;
+    padding:13px 18px; border-radius:18px; border:1px solid var(--line);
+    background:rgba(255,255,255,.04); backdrop-filter:blur(20px);
+    -webkit-backdrop-filter:blur(20px);
+    color:var(--txt); cursor:pointer;
+    transition:border-color .3s, box-shadow .3s, border-radius .4s cubic-bezier(0.34,1.56,0.64,1);
+    box-shadow:0 2px 16px rgba(0,0,0,.3); }
+  .nav-trigger:hover { border-color:rgba(255,47,214,.4); box-shadow:0 4px 24px rgba(255,47,214,.15); }
+  .nav-trigger.open {
+    border-radius:18px 18px 0 0; border-color:rgba(255,47,214,.35);
+    box-shadow:0 0 28px rgba(255,47,214,.2); }
+
+  .nav-t-icon { font-size:20px; line-height:1; flex:none; }
+  .nav-t-label {
+    flex:1; text-align:left; font-family:"Rajdhani",sans-serif;
+    font-size:15px; font-weight:700; letter-spacing:.8px; text-transform:uppercase; }
+  .nav-t-sub {
+    font-size:11px; color:var(--dim); letter-spacing:.3px;
+    font-weight:500; text-transform:none; font-family:"Rajdhani",sans-serif; }
+
+  .nav-chevron {
+    width:18px; height:18px; flex:none; color:var(--dim);
+    transition:transform .5s cubic-bezier(0.34,1.56,0.64,1), color .3s; }
+  .nav-trigger.open .nav-chevron { transform:rotate(-180deg); color:var(--neon); }
+
+  .nav-dropdown {
+    position:absolute; top:100%; left:0; right:0;
+    background:rgba(12,6,28,.96); backdrop-filter:blur(28px);
+    -webkit-backdrop-filter:blur(28px);
+    border:1px solid rgba(255,47,214,.25); border-top:none;
+    border-radius:0 0 18px 18px;
+    overflow:hidden; pointer-events:none;
+    clip-path:inset(0 0 100% 0 round 0 0 18px 18px);
+    opacity:0;
+    transition:
+      clip-path .5s cubic-bezier(0.34,1.56,0.64,1),
+      opacity .25s ease;
+    box-shadow:0 16px 40px rgba(0,0,0,.5), 0 0 0 1px rgba(255,47,214,.08) inset; }
+  .nav-dropdown.open {
+    clip-path:inset(0 0 -2px 0 round 0 0 18px 18px);
+    opacity:1; pointer-events:auto; }
+
+  .nav-item {
+    width:100%; display:flex; align-items:center; gap:14px;
+    padding:14px 20px; border:none; background:none;
+    color:var(--dim); cursor:pointer;
+    font-family:"Rajdhani",sans-serif; font-size:14px;
+    font-weight:700; letter-spacing:.6px; text-transform:uppercase;
+    text-align:left; position:relative; overflow:hidden;
+    opacity:0; transform:translateY(-10px) scale(.97);
+    transition:color .2s, opacity .0s, transform .0s; }
+  .nav-item::before {
+    content:""; position:absolute; inset:0;
+    background:linear-gradient(90deg, rgba(255,47,214,.12), transparent);
+    transform:translateX(-100%);
+    transition:transform .4s cubic-bezier(0.34,1.56,0.64,1); }
+  .nav-item:hover::before { transform:translateX(0); }
+  .nav-item:hover { color:#fff; }
+  .nav-item + .nav-item { border-top:1px solid rgba(255,255,255,.04); }
+
+  .nav-item.on { color:var(--neon); }
+  .nav-item.on::after {
+    content:""; position:absolute; left:0; top:20%; bottom:20%;
+    width:3px; border-radius:2px;
+    background:linear-gradient(to bottom, var(--neon), var(--violet));
+    box-shadow:0 0 8px var(--neon); }
+
+  .nav-i-icon { font-size:18px; line-height:1; flex:none; }
+
+  /* stagger items in when dropdown opens */
+  .nav-dropdown.open .nav-item {
+    opacity:1; transform:none;
+    transition:
+      color .2s,
+      opacity .35s ease calc(var(--ni,0) * 55ms),
+      transform .45s cubic-bezier(0.34,1.56,0.64,1) calc(var(--ni,0) * 55ms); }
+  .nav-item:nth-child(1){--ni:0} .nav-item:nth-child(2){--ni:1}
+  .nav-item:nth-child(3){--ni:2} .nav-item:nth-child(4){--ni:3}
+  .nav-item:nth-child(5){--ni:4}
+
+  /* panel animation */
+  .panel { display:none; }
+  .panel.on { display:block; animation:panelIn .4s cubic-bezier(0.34,1.56,0.64,1) both; }
+  @keyframes panelIn {
+    from { opacity:0; transform:translateY(12px) scale(.985); }
+    to   { opacity:1; transform:none; } }
 
   .card { background:var(--card); border:1px solid var(--line); border-radius:16px;
     padding:8px 16px; backdrop-filter:blur(18px); -webkit-backdrop-filter:blur(18px);
@@ -3292,12 +3369,21 @@ _DASHBOARD_TMPL = r"""<!doctype html>
     </div>
   </div>
 
-  <div class="tabs">
-    <button class="tab on" data-p="squad" onclick="tab(this)"><span class="tab-icon">🎮</span><span class="tab-txt">Squad</span></button>
-    <button class="tab" data-p="lb" onclick="tab(this)"><span class="tab-icon">🏆</span><span class="tab-txt">Ranks</span></button>
-    <button class="tab" data-p="pipeline" onclick="tab(this)"><span class="tab-icon">🎬</span><span class="tab-txt">Clips</span></button>
-    <button class="tab" data-p="slap" onclick="tab(this);loadSlap()"><span class="tab-icon">🎵</span><span class="tab-txt">slap</span></button>
-    <button class="tab" data-p="wa" onclick="tab(this);loadWa()"><span class="tab-icon">💬</span><span class="tab-txt">WhatsApp</span></button>
+  <div class="nav-wrap" id="navWrap">
+    <button class="nav-trigger" id="navTrigger" onclick="toggleNav(event)">
+      <span class="nav-t-icon" id="navActiveIcon">🎮</span>
+      <div style="flex:1;min-width:0">
+        <div class="nav-t-label" id="navActiveLabel">Squad</div>
+      </div>
+      <svg class="nav-chevron" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><polyline points="6 9 12 15 18 9"/></svg>
+    </button>
+    <div class="nav-dropdown" id="navDropdown">
+      <button class="nav-item on" data-p="squad" data-icon="🎮" data-label="Squad" onclick="tab(this)"><span class="nav-i-icon">🎮</span><span>Squad</span></button>
+      <button class="nav-item" data-p="lb" data-icon="🏆" data-label="Ranks" onclick="tab(this)"><span class="nav-i-icon">🏆</span><span>Ranks</span></button>
+      <button class="nav-item" data-p="pipeline" data-icon="🎬" data-label="Clips" onclick="tab(this)"><span class="nav-i-icon">🎬</span><span>Clips</span></button>
+      <button class="nav-item" data-p="slap" data-icon="🎵" data-label="Slap" onclick="tab(this);loadSlap()"><span class="nav-i-icon">🎵</span><span>Slap</span></button>
+      <button class="nav-item" data-p="wa" data-icon="💬" data-label="WhatsApp" onclick="tab(this);loadWa()"><span class="nav-i-icon">💬</span><span>WhatsApp</span></button>
+    </div>
   </div>
   <div class="panel on" id="p-squad">
     <div id="together"></div>
@@ -3610,10 +3696,31 @@ async function refreshBoard(){
   } catch(e){}
 }
 
+function toggleNav(e){
+  e && e.stopPropagation();
+  const trigger=$('navTrigger'), dd=$('navDropdown');
+  const opening = !dd.classList.contains('open');
+  trigger.classList.toggle('open', opening);
+  dd.classList.toggle('open', opening);
+}
+function closeNav(){
+  $('navTrigger') && $('navTrigger').classList.remove('open');
+  $('navDropdown') && $('navDropdown').classList.remove('open');
+}
+document.addEventListener('click', e=>{
+  if(!e.target.closest('#navWrap')) closeNav();
+});
 function tab(btn){
-  document.querySelectorAll('.tab').forEach(t=>t.classList.remove('on'));
+  document.querySelectorAll('.nav-item').forEach(t=>t.classList.remove('on'));
   document.querySelectorAll('.panel').forEach(p=>p.classList.remove('on'));
-  btn.classList.add('on'); $('p-'+btn.dataset.p).classList.add('on');
+  btn.classList.add('on');
+  $('p-'+btn.dataset.p).classList.add('on');
+  // update trigger label
+  const icon=$('navActiveIcon'), lbl=$('navActiveLabel');
+  if(icon) icon.textContent = btn.dataset.icon||'';
+  if(lbl)  lbl.textContent  = btn.dataset.label||'';
+  // close dropdown with a slight delay so user sees selection
+  setTimeout(closeNav, 120);
 }
 function fmtLast(iso){ if(!iso) return 'offline';
   const s=(Date.now()-new Date(iso))/1000;
