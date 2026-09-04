@@ -1642,8 +1642,10 @@ def api_delete_button(req: CustomButtonRequest):
 
 @app.get("/", response_class=HTMLResponse)
 @app.get("/dashboard", response_class=HTMLResponse)
-def dashboard():
-    return HTMLResponse(_dashboard_html())
+def dashboard(request: Request):
+    session = _get_session(request)
+    user_email = session.get("email", "") if session else ""
+    return HTMLResponse(_dashboard_html(user_email))
 
 
 
@@ -1691,8 +1693,20 @@ def _soundboard_json() -> str:
     return json.dumps(_soundboard())
 
 
-def _dashboard_html() -> str:
-    return _DASHBOARD_TMPL.replace("__SOUNDBOARD__", _soundboard_json())
+def _dashboard_html(user_email: str = "") -> str:
+    if user_email:
+        disp = user_email.split("@")[0] if "@" in user_email else user_email
+        user_html = (
+            f'<div class="user-chip">'
+            f'<span class="uc-name">{disp}</span>'
+            f'<a class="uc-logout" href="/auth/logout">Sign out</a>'
+            f'</div>'
+        )
+    else:
+        user_html = '<a class="uc-logout" href="/auth/login">Sign in</a>'
+    return (_DASHBOARD_TMPL
+            .replace("__SOUNDBOARD__", _soundboard_json())
+            .replace("__USER__", user_html))
 
 
 _DASHBOARD_TMPL = r"""<!doctype html>
@@ -1967,12 +1981,23 @@ _DASHBOARD_TMPL = r"""<!doctype html>
     border:1px solid rgba(255,210,74,.25); border-radius:8px; padding:1px 7px;
     flex:none; white-space:nowrap; }
   .cage { color:var(--dim); font-size:11px; flex:none; margin-left:auto; }
+
+  .user-chip { display:flex; align-items:center; gap:7px; }
+  .uc-name { font-size:11px; color:var(--dim); font-weight:600; letter-spacing:.3px;
+    max-width:90px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+  .uc-logout { font-size:11px; color:var(--neon); text-decoration:none; font-weight:700;
+    padding:4px 10px; border:1px solid rgba(255,47,214,.4); border-radius:8px;
+    white-space:nowrap; transition:background .15s; }
+  .uc-logout:hover { background:rgba(255,47,214,.12); }
 </style></head>
 <body><div class="wrap">
   <div class="top">
     <div class="logo">🎮</div>
     <div><h1>The Squad</h1><p class="tag">Tap to blast the group · live PSN status</p></div>
-    <div class="live" id="livecount"></div>
+    <div style="margin-left:auto;display:flex;flex-direction:column;align-items:flex-end;gap:8px">
+      <div class="live" id="livecount"></div>
+      __USER__
+    </div>
   </div>
 
   <div class="tabs">
