@@ -15,6 +15,10 @@ services:
       - SQUAD_GROUP_NAME=${SQUAD_GROUP_NAME:-The Squad}
       - FFMPEG_TIMEOUT_SECONDS=${FFMPEG_TIMEOUT_SECONDS:-300}
       - MONTAGE_TIMEZONE=${MONTAGE_TIMEZONE:-America/Los_Angeles}
+      - PORTAL_PUBLIC_HOST=${PORTAL_PUBLIC_HOST:-psn.crcmz.me}
+      - ZITADEL_ISSUER=${ZITADEL_ISSUER:-https://auth.crcmz.me}
+      - ZITADEL_CLIENT_ID=${ZITADEL_CLIENT_ID:-}
+      - SESSION_SECRET=${SESSION_SECRET:-}
     extra_hosts:
       - "host.docker.internal:host-gateway"
     ports:

@@ -17,9 +17,6 @@ GROUP_NAME = os.environ.get("GROUP_NAME", "crcmz-mod")
 # "Squad Up" Stream Deck button rallies. Created 2026-08-15; overridable via env.
 SQUAD_GROUP_ID = os.environ.get("SQUAD_GROUP_ID", "213250d833ccce334b651e2ee15e365c97468e02-869")
 SQUAD_GROUP_NAME = os.environ.get("SQUAD_GROUP_NAME", "The Squad")
-# Self-service linking portal: shared passcode friends type before the form
-# shows (keeps randos who find the URL out). Set PORTAL_PASSCODE in the env.
-PORTAL_PASSCODE = os.environ.get("PORTAL_PASSCODE", "")
 
 if not NPSSO_TOKEN:
     raise RuntimeError("NPSSO_TOKEN environment variable is required")
@@ -268,73 +265,6 @@ def roast_status():
 
 import portal as portal_mod
 
-
-def _gate_page(error: str = "") -> str:
-    """Full-page passcode lock. Nothing else is shown until it's entered."""
-    err = (
-        f'<div class="err">⚠️ {error}</div>' if error else ""
-    )
-    return f"""<!doctype html>
-<html lang="en"><head>
-<meta charset="utf-8">
-<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
-<title>Enter passcode</title>
-<style>
-  :root {{ color-scheme:dark; }}
-  * {{ box-sizing:border-box; -webkit-tap-highlight-color:transparent; }}
-  html,body {{ margin:0; }}
-  body {{ font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif;
-    color:#eaf0ff; min-height:100dvh; display:flex; align-items:center;
-    justify-content:center; padding:24px; background:#070b18; position:relative;
-    overflow:hidden; }}
-  body::before, body::after {{ content:""; position:fixed; inset:-30% -10%; z-index:-1;
-    background:
-      radial-gradient(45% 45% at 22% 20%, rgba(0,112,209,.4), transparent 60%),
-      radial-gradient(42% 42% at 80% 24%, rgba(124,92,255,.38), transparent 60%),
-      radial-gradient(50% 45% at 55% 92%, rgba(0,163,255,.3), transparent 62%);
-    filter:blur(30px); animation:drift 18s ease-in-out infinite alternate; }}
-  body::after {{ animation-duration:26s; animation-direction:alternate-reverse; opacity:.65; }}
-  @keyframes drift {{ from {{ transform:translate3d(-3%,-2%,0) scale(1); }}
-    to {{ transform:translate3d(4%,3%,0) scale(1.12); }} }}
-  .lock {{ width:100%; max-width:400px; text-align:center;
-    background:rgba(23,31,54,.72); border:1px solid rgba(120,140,190,.2);
-    border-radius:26px; padding:38px 30px 30px;
-    box-shadow:0 30px 80px rgba(0,0,0,.55), inset 0 1px 0 rgba(255,255,255,.06);
-    backdrop-filter:blur(22px) saturate(140%); -webkit-backdrop-filter:blur(22px) saturate(140%);
-    animation:rise .55s cubic-bezier(.2,.8,.2,1) both; }}
-  @keyframes rise {{ from {{ opacity:0; transform:translateY(18px) scale(.97); }} }}
-  .badge {{ width:74px; height:74px; margin:0 auto 18px; border-radius:22px;
-    display:grid; place-items:center; font-size:34px;
-    background:linear-gradient(135deg,#0070d1,#7c5cff);
-    box-shadow:0 12px 34px rgba(0,112,209,.5); animation:pop .5s cubic-bezier(.2,1.4,.4,1) both; }}
-  @keyframes pop {{ from {{ transform:scale(.4); opacity:0; }} }}
-  h1 {{ font-size:22px; margin:0 0 6px; }}
-  p {{ color:#9fb0d4; font-size:13.5px; line-height:1.55; margin:0 0 22px; }}
-  input {{ width:100%; padding:15px; border-radius:14px; text-align:center;
-    border:1px solid rgba(140,160,255,.25); background:rgba(6,11,24,.6);
-    color:#eaf0ff; font-size:19px; letter-spacing:4px; -webkit-appearance:none;
-    transition:border .15s, box-shadow .15s; }}
-  input:focus {{ outline:none; border-color:#00a3ff; box-shadow:0 0 0 3px rgba(0,163,255,.25); }}
-  button {{ width:100%; margin-top:14px; padding:15px; border:none; border-radius:14px;
-    font-size:16px; font-weight:700; cursor:pointer; color:#fff;
-    background:linear-gradient(135deg,#0070d1,#00a3ff);
-    box-shadow:0 12px 30px rgba(0,112,209,.45); transition:transform .07s, box-shadow .15s; }}
-  button:active {{ transform:scale(.975); }}
-  button:hover {{ box-shadow:0 14px 36px rgba(0,112,209,.6); }}
-  .err {{ background:rgba(255,107,139,.12); border:1px solid rgba(255,107,139,.4);
-    color:#ffc0cd; padding:11px; border-radius:12px; font-size:13px; margin-bottom:16px; }}
-</style></head>
-<body>
-  <form class="lock" method="post" action="/portal/unlock">
-    <div class="badge">🔒</div>
-    <h1>Squad access</h1>
-    <p>This page is protected. Enter the passcode the host gave you to continue.</p>
-    {err}
-    <input name="passcode" type="text" inputmode="text" autocomplete="off"
-      autofocus placeholder="passcode" aria-label="Passcode">
-    <button type="submit">Unlock →</button>
-  </form>
-</body></html>"""
 
 
 def _portal_page(error: str = "", ok: str = "") -> str:
@@ -628,91 +558,192 @@ def _portal_page(error: str = "", ok: str = "") -> str:
 </body></html>"""
 
 
-# --- Passcode gate (whole page is locked until the code is entered once) ---
+# ── Zitadel OIDC auth ────────────────────────────────────────────────────────
 #
-# We set a cookie holding a hash of the passcode after a correct unlock. Every
-# portal view checks it; the form/link routes 403 without it. One unlock per
-# device, not per submit.
+# Authorization-code + PKCE flow. No client secret needed.
+# Required env vars: ZITADEL_CLIENT_ID, SESSION_SECRET
+# Redirect URI to register in Zitadel: https://psn.crcmz.me/auth/callback
 
-import hashlib
+import hashlib as _hashlib, base64 as _base64, secrets as _secrets
+from urllib.parse import urlencode as _urlencode
+from itsdangerous import URLSafeTimedSerializer as _USTS, BadSignature, SignatureExpired
 
-_GATE_COOKIE = "portal_gate"
+ZITADEL_ISSUER    = os.environ.get("ZITADEL_ISSUER", "https://auth.crcmz.me")
+ZITADEL_CLIENT_ID = os.environ.get("ZITADEL_CLIENT_ID", "")
+SESSION_SECRET    = os.environ.get("SESSION_SECRET", "")
 
+_SESSION_COOKIE    = "psn_session"
+_OIDC_STATE_COOKIE = "psn_oidc_state"
+_SESSION_MAX_AGE   = 60 * 60 * 24 * 30  # 30 days
+_OIDC_CONFIG_CACHE: dict = {}
 
-def _gate_value() -> str:
-    """Opaque cookie value proving the passcode was entered (not the code itself)."""
-    return hashlib.sha256(f"psn-portal::{PORTAL_PASSCODE}".encode()).hexdigest()
-
-
-def _is_unlocked(request) -> bool:
-    if not PORTAL_PASSCODE:
-        return True
-    return request.cookies.get(_GATE_COOKIE) == _gate_value()
-
-
-def _set_gate_cookie(resp) -> None:
-    # 30-day gate; httponly so page JS can't read it, samesite lax for the redirect.
-    resp.set_cookie(
-        _GATE_COOKIE, _gate_value(), max_age=2592000,
-        httponly=True, samesite="lax", secure=True, path="/",
-    )
-
-
-# --- Site-wide passcode enforcement -----------------------------------------
-#
-# Every public request must be unlocked. We reuse the same cookie gate above and
-# apply it to ALL routes via one middleware, so the dashboard, /api/squad, etc.
-# are no longer world-readable. Two carve-outs:
-#   * OPEN_PATHS: the unlock form + container healthcheck must work pre-unlock.
-#   * Direct LAN/Tailscale IP access (the Stream Deck buttons) bypasses the gate
-#     -- those hosts are already network-restricted and carry no cookie.
-_OPEN_PATHS = {"/portal/unlock", "/health"}
-
-# The only public hostname; anything else (bare IPs from the tailnet/LAN) is a
-# trusted direct hit and skips the gate.
+# The only public hostname; bare IPs from the tailnet/LAN bypass auth.
 _PUBLIC_HOST = os.environ.get("PORTAL_PUBLIC_HOST", "psn.crcmz.me")
+# Paths that must be reachable before authentication.
+_OPEN_PATHS = {"/health", "/v2/health", "/auth/login", "/auth/callback", "/auth/logout"}
+
+
+def _signer() -> _USTS:
+    return _USTS(SESSION_SECRET or "dev-insecure", salt="psn-session")
+
+
+def _state_signer() -> _USTS:
+    return _USTS(SESSION_SECRET or "dev-insecure", salt="psn-oidc-state")
+
+
+def _get_session(request: Request) -> dict | None:
+    val = request.cookies.get(_SESSION_COOKIE)
+    if not val:
+        return None
+    try:
+        return _signer().loads(val, max_age=_SESSION_MAX_AGE)
+    except (BadSignature, SignatureExpired):
+        return None
+
+
+def _pkce() -> tuple[str, str]:
+    verifier = _base64.urlsafe_b64encode(_secrets.token_bytes(32)).rstrip(b"=").decode()
+    challenge = _base64.urlsafe_b64encode(
+        _hashlib.sha256(verifier.encode()).digest()
+    ).rstrip(b"=").decode()
+    return verifier, challenge
+
+
+async def _oidc_cfg() -> dict:
+    global _OIDC_CONFIG_CACHE
+    if _OIDC_CONFIG_CACHE:
+        return _OIDC_CONFIG_CACHE
+    import httpx as _hx
+    async with _hx.AsyncClient(timeout=10) as c:
+        r = await c.get(f"{ZITADEL_ISSUER}/.well-known/openid-configuration")
+        r.raise_for_status()
+        _OIDC_CONFIG_CACHE = r.json()
+    return _OIDC_CONFIG_CACHE
 
 
 @app.middleware("http")
-async def _passcode_gate(request: Request, call_next):
-    if not PORTAL_PASSCODE:
-        return await call_next(request)
-
+async def _auth_gate(request: Request, call_next):
     path = request.url.path
-    if path in _OPEN_PATHS or _is_unlocked(request):
+    if path in _OPEN_PATHS:
         return await call_next(request)
 
-    # Requests that don't arrive on the public hostname are direct IP hits from
-    # the tailnet/LAN (e.g. Stream Deck) -- let them through.
+    # Tailscale/LAN direct-IP hits (Stream Deck, etc.) bypass auth entirely.
     host = (request.headers.get("host") or "").split(":")[0]
     if host != _PUBLIC_HOST:
         return await call_next(request)
 
-    # Locked: show the gate for browser navigations, 403 for anything else.
+    if _get_session(request):
+        return await call_next(request)
+
     accept = request.headers.get("accept", "")
     if request.method == "GET" and "text/html" in accept:
-        return HTMLResponse(_gate_page(), status_code=401)
-    return JSONResponse({"detail": "passcode required"}, status_code=401)
+        next_url = request.url.path
+        if request.url.query:
+            next_url += "?" + request.url.query
+        return RedirectResponse(url=f"/auth/login?next={next_url}", status_code=302)
+    return JSONResponse({"detail": "authentication required"}, status_code=401)
+
+
+@app.get("/auth/login")
+async def auth_login(request: Request, next: str = "/"):
+    if not ZITADEL_CLIENT_ID:
+        return HTMLResponse("<h1>ZITADEL_CLIENT_ID not configured</h1>", status_code=503)
+    try:
+        cfg = await _oidc_cfg()
+    except Exception as e:
+        return HTMLResponse(f"<h1>Auth service unavailable: {e}</h1>", status_code=503)
+
+    verifier, challenge = _pkce()
+    state = _secrets.token_urlsafe(16)
+    signed_state = _state_signer().dumps({"state": state, "verifier": verifier, "next": next[:200]})
+
+    params = _urlencode({
+        "client_id": ZITADEL_CLIENT_ID,
+        "redirect_uri": f"https://{_PUBLIC_HOST}/auth/callback",
+        "response_type": "code",
+        "scope": "openid email profile",
+        "state": state,
+        "code_challenge": challenge,
+        "code_challenge_method": "S256",
+    })
+    resp = RedirectResponse(url=f"{cfg['authorization_endpoint']}?{params}", status_code=302)
+    resp.set_cookie(_OIDC_STATE_COOKIE, signed_state, httponly=True, samesite="lax",
+                    secure=True, max_age=600, path="/")
+    return resp
+
+
+@app.get("/auth/callback")
+async def auth_callback(request: Request, code: str = "", state: str = "", error: str = ""):
+    if error or not code:
+        return RedirectResponse(url="/auth/login", status_code=302)
+
+    signed_state = request.cookies.get(_OIDC_STATE_COOKIE)
+    if not signed_state:
+        return RedirectResponse(url="/auth/login", status_code=302)
+    try:
+        sp = _state_signer().loads(signed_state, max_age=600)
+    except (BadSignature, SignatureExpired):
+        return RedirectResponse(url="/auth/login", status_code=302)
+    if sp.get("state") != state:
+        return RedirectResponse(url="/auth/login", status_code=302)
+
+    try:
+        cfg = await _oidc_cfg()
+        import httpx as _hx
+        async with _hx.AsyncClient(timeout=15) as c:
+            tr = await c.post(cfg["token_endpoint"], data={
+                "grant_type": "authorization_code",
+                "code": code,
+                "redirect_uri": f"https://{_PUBLIC_HOST}/auth/callback",
+                "client_id": ZITADEL_CLIENT_ID,
+                "code_verifier": sp["verifier"],
+            })
+        if tr.status_code != 200:
+            logger.error("oidc: token exchange failed %s: %s", tr.status_code, tr.text[:200])
+            return RedirectResponse(url="/auth/login", status_code=302)
+
+        access_token = tr.json().get("access_token", "")
+        async with _hx.AsyncClient(timeout=10) as c:
+            ur = await c.get(cfg["userinfo_endpoint"],
+                             headers={"Authorization": f"Bearer {access_token}"})
+        if ur.status_code != 200:
+            logger.error("oidc: userinfo failed %s", ur.status_code)
+            return RedirectResponse(url="/auth/login", status_code=302)
+        userinfo = ur.json()
+    except Exception as e:
+        logger.error("oidc: callback error: %s", e)
+        return RedirectResponse(url="/auth/login", status_code=302)
+
+    next_url = sp.get("next") or "/"
+    if not next_url.startswith("/"):
+        next_url = "/"
+    session = {"sub": userinfo.get("sub"), "email": userinfo.get("email", "")}
+
+    resp = RedirectResponse(url=next_url, status_code=302)
+    resp.set_cookie(_SESSION_COOKIE, _signer().dumps(session), httponly=True, samesite="lax",
+                    secure=True, max_age=_SESSION_MAX_AGE, path="/")
+    resp.delete_cookie(_OIDC_STATE_COOKIE, path="/")
+    return resp
+
+
+@app.get("/auth/logout")
+async def auth_logout():
+    try:
+        cfg = await _oidc_cfg()
+        end_session = cfg.get("end_session_endpoint", f"{ZITADEL_ISSUER}/oidc/v1/end_session")
+    except Exception:
+        end_session = f"{ZITADEL_ISSUER}/oidc/v1/end_session"
+    resp = RedirectResponse(
+        url=f"{end_session}?post_logout_redirect_uri=https://{_PUBLIC_HOST}",
+        status_code=302,
+    )
+    resp.delete_cookie(_SESSION_COOKIE, path="/")
+    return resp
 
 
 @app.get("/portal", response_class=HTMLResponse)
 def portal_home(request: Request):
-    if not _is_unlocked(request):
-        return HTMLResponse(_gate_page())
     return HTMLResponse(_portal_page())
-
-
-@app.post("/portal/unlock", response_class=HTMLResponse)
-def portal_unlock(passcode: str = Form("")):
-    if PORTAL_PASSCODE and passcode.strip() != PORTAL_PASSCODE:
-        return HTMLResponse(
-            _gate_page(error="That code isn't right — ask the host."),
-            status_code=403,
-        )
-    # Correct (or no passcode configured): set cookie and send to the wizard.
-    resp = RedirectResponse(url="/portal", status_code=303)
-    _set_gate_cookie(resp)
-    return resp
 
 
 @app.post("/portal/link", response_class=HTMLResponse)
@@ -721,8 +752,6 @@ def portal_link(
     npsso: str = Form(...),
     mm_username: str = Form(""),
 ):
-    if not _is_unlocked(request):
-        return HTMLResponse(_gate_page(error="Enter the passcode first."), status_code=403)
     try:
         result = portal_mod.link_user(npsso, mm_username=mm_username.strip())
     except portal_mod.LinkError as e:
@@ -738,10 +767,7 @@ def portal_link(
 
 
 @app.get("/portal/users")
-def portal_users(key: str = ""):
-    """Admin: list linked users (no secrets). Gated by the same passcode."""
-    if PORTAL_PASSCODE and key != PORTAL_PASSCODE:
-        raise HTTPException(status_code=403, detail="forbidden")
+def portal_users():
     return {"users": portal_mod.list_users()}
 
 
