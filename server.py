@@ -714,9 +714,9 @@ def _login_page(error: str = "", next: str = "/") -> str:
   </div>
   {err_html}
   <form method="post" action="/auth/login?next={safe_next}" id="f">
-    <label for="em">Email</label>
-    <input type="email" name="email" id="em" required autocomplete="email"
-      placeholder="you@example.com" inputmode="email">
+    <label for="em">Email or username</label>
+    <input type="text" name="email" id="em" required autocomplete="username"
+      placeholder="you@example.com or InterestingSoup" inputmode="email">
     <label for="pw">Password</label>
     <input type="password" name="pw" id="pw" required autocomplete="current-password"
       placeholder="Your password">
@@ -774,18 +774,40 @@ async def auth_login_submit(request: Request, next: str = "/"):
         return HTMLResponse(_login_page(error="Auth service not configured.", next=next), status_code=503)
 
     import httpx as _hx
+
+    async def _resolve_login_name(identifier: str) -> str:
+        """If identifier looks like an email and direct lookup fails, search by email."""
+        if "@" not in identifier:
+            return identifier
+        try:
+            async with _hx.AsyncClient(timeout=10) as c:
+                sr = await c.post(
+                    f"{ZITADEL_ISSUER}/management/v1/users/_search",
+                    json={"queries": [{"emailQuery": {"emailAddress": identifier,
+                                                      "method": "TEXT_QUERY_METHOD_EQUALS"}}]},
+                    headers={"Authorization": f"Bearer {ZITADEL_SERVICE_TOKEN}"},
+                )
+            if sr.status_code == 200:
+                results = sr.json().get("result", [])
+                if results:
+                    return results[0].get("preferredLoginName", identifier)
+        except Exception:
+            pass
+        return identifier
+
     try:
+        login_name = await _resolve_login_name(email)
         async with _hx.AsyncClient(timeout=15) as c:
             r = await c.post(
                 f"{ZITADEL_ISSUER}/v2/sessions",
                 json={"checks": {
-                    "user":     {"loginName": email},
+                    "user":     {"loginName": login_name},
                     "password": {"password": password},
                 }},
                 headers={"Authorization": f"Bearer {ZITADEL_SERVICE_TOKEN}"},
             )
         if r.status_code not in (200, 201):
-            logger.warning("auth: session create %s for %s", r.status_code, email)
+            logger.warning("auth: session create %s for %s (loginName=%s)", r.status_code, email, login_name)
             return HTMLResponse(_login_page(error="Invalid email or password.", next=next), status_code=401)
 
         session_id = r.json().get("sessionId", "")
