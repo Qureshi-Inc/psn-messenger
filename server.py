@@ -1019,7 +1019,7 @@ async def passkey_begin(request: Request):
                 json={
                     "checks": {"user": {"loginName": login_name}},
                     "challenges": {"webAuthN": {
-                        "domain": _PUBLIC_HOST,
+                        "domain": ZITADEL_ISSUER.replace("https://", "").replace("http://", "").rstrip("/"),
                         "userVerificationRequirement": "USER_VERIFICATION_REQUIREMENT_REQUIRED",
                     }},
                 },
