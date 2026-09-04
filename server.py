@@ -2388,7 +2388,12 @@ def api_delete_button(req: CustomButtonRequest):
 def dashboard(request: Request):
     session = _get_session(request)
     user_email = session.get("email", "") if session else ""
-    return HTMLResponse(_dashboard_html(user_email))
+    psn_id = ""
+    if session:
+        rec = portal_mod.find_by_zitadel_id(session.get("sub", ""))
+        if rec:
+            psn_id = rec.get("online_id", "")
+    return HTMLResponse(_dashboard_html(user_email, psn_id))
 
 
 
@@ -2436,7 +2441,7 @@ def _soundboard_json() -> str:
     return json.dumps(_soundboard())
 
 
-def _dashboard_html(user_email: str = "") -> str:
+def _dashboard_html(user_email: str = "", psn_id: str = "") -> str:
     if user_email:
         disp = user_email.split("@")[0] if "@" in user_email else user_email
         user_html = (
@@ -2452,9 +2457,11 @@ def _dashboard_html(user_email: str = "") -> str:
         )
     else:
         user_html = '<a class="ud-item" href="/auth/login" style="padding:8px 12px;font-size:12px">Sign in</a>'
+    import json as _json
     return (_DASHBOARD_TMPL
             .replace("__SOUNDBOARD__", _soundboard_json())
-            .replace("__USER__", user_html))
+            .replace("__USER__", user_html)
+            .replace("__PSN_ID__", _json.dumps(psn_id)))
 
 
 _DASHBOARD_TMPL = r"""<!doctype html>
@@ -2705,6 +2712,36 @@ _DASHBOARD_TMPL = r"""<!doctype html>
     z-index:50; box-shadow:0 12px 30px rgba(0,0,0,.5); }
   .toast.show { opacity:1; }
 
+  /* ── Sent flyout animation ── */
+  .sent-fly { position:fixed; left:50%; bottom:calc(var(--board-h,220px) + 12px);
+    transform:translateX(-50%); z-index:200; pointer-events:none;
+    display:flex; align-items:center; gap:10px;
+    background:rgba(12,6,28,.82); border:1px solid rgba(255,255,255,.14);
+    backdrop-filter:blur(18px); -webkit-backdrop-filter:blur(18px);
+    border-radius:18px; padding:10px 16px 10px 10px;
+    box-shadow:0 8px 32px rgba(0,0,0,.5), 0 0 0 1px rgba(255,47,214,.18);
+    animation:sentfly 1.5s cubic-bezier(.22,.6,.36,1) forwards; }
+  .sent-fly .sf-av { width:40px; height:40px; border-radius:50%; object-fit:cover;
+    flex:none; border:2px solid rgba(255,255,255,.2);
+    background:linear-gradient(135deg,var(--violet),var(--neon)); }
+  .sent-fly .sf-av-fallback { width:40px; height:40px; border-radius:50%; flex:none;
+    display:grid; place-items:center; font-size:18px;
+    background:linear-gradient(135deg,var(--violet),var(--neon));
+    border:2px solid rgba(255,255,255,.2); }
+  .sent-fly .sf-info { min-width:0; }
+  .sent-fly .sf-name { font-family:"Orbitron",sans-serif; font-size:10px;
+    letter-spacing:1px; color:var(--cyan); text-transform:uppercase; margin-bottom:2px; }
+  .sent-fly .sf-msg { font-size:13px; font-weight:600; color:var(--txt);
+    white-space:nowrap; overflow:hidden; text-overflow:ellipsis; max-width:200px; }
+  .sent-fly .sf-tick { font-size:15px; margin-left:4px; flex:none;
+    filter:drop-shadow(0 0 6px rgba(140,255,43,.8)); }
+  @keyframes sentfly {
+    0%   { transform:translateX(-50%) translateY(0)    scale(1);    opacity:1; }
+    15%  { transform:translateX(-50%) translateY(-8px) scale(1.04); opacity:1; }
+    70%  { transform:translateX(-50%) translateY(-55vh) scale(.88); opacity:.55; }
+    100% { transform:translateX(-50%) translateY(-92vh) scale(.72); opacity:0; }
+  }
+
   /* ── Pipeline / Montage panel ── */
   .pip-section { margin-bottom:14px; }
   .pip-title { font-family:"Orbitron",sans-serif; font-size:10px; letter-spacing:2px;
@@ -2940,6 +2977,8 @@ _DASHBOARD_TMPL = r"""<!doctype html>
 <div class="toast" id="toast"></div>
 <script>
 const SOUNDBOARD = __SOUNDBOARD__;
+const MY_PSN_ID = __PSN_ID__;  // injected server-side, "" if not linked
+let MY_AVATAR = null, MOD_AVATAR = null;
 const $ = id => document.getElementById(id);
 const esc = s => (s||'').replace(/[&<>"]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
 const toast = m => { const t=$('toast'); t.textContent=m; t.classList.add('show');
@@ -2987,6 +3026,23 @@ function toggleBoard(){
 if(localStorage.getItem('sb_collapsed')==='1') $('boardWrap').classList.add('collapsed');
 window.addEventListener('resize', syncBoardHeight);
 renderButtons();
+// ── Sent flyout: avatar card that floats up and fades away ───────────────────
+function showSentFly(avatarUrl, senderName, msgText){
+  const el = document.createElement('div');
+  el.className = 'sent-fly';
+  const avHtml = avatarUrl
+    ? '<img class="sf-av" src="'+avatarUrl+'" onerror="this.parentNode.innerHTML=\'<div class=sf-av-fallback>🎮</div>\'">'
+    : '<div class="sf-av-fallback">🎮</div>';
+  el.innerHTML = avHtml +
+    '<div class="sf-info">'+
+      '<div class="sf-name">'+esc(senderName)+'</div>'+
+      '<div class="sf-msg">'+esc(msgText.length>48?msgText.slice(0,47)+'…':msgText)+'</div>'+
+    '</div>'+
+    '<span class="sf-tick">✓</span>';
+  document.body.appendChild(el);
+  el.addEventListener('animationend', ()=>el.remove());
+}
+
 async function fire(el){
   if(_lpFired){ _lpFired=false; return; }  // a long-press just deleted; don't send
   const b = BUTTONS[el.dataset.i];
@@ -2996,7 +3052,8 @@ async function fire(el){
     if(b.path){ r = await fetch(b.path,{method:'POST'}); }
     else { r = await fetch('/v2/squad',{method:'POST',headers:{'Content-Type':'application/json'},
       body:JSON.stringify({message:b.msg})}); }
-    toast(r.ok ? 'Sent! 🎮' : 'Failed ('+r.status+')');
+    if(r.ok) showSentFly(MOD_AVATAR, 'CRCMZ MOD', b.label||b.msg||'');
+    else toast('Failed ('+r.status+')');
   } catch(e){ toast('Network error'); }
 }
 // Ad-hoc one-off message -> sent as-is to the group (not saved, no AI).
@@ -3008,8 +3065,11 @@ async function sendQuick(){
   try {
     const r = await fetch('/v2/send',{method:'POST',headers:{'Content-Type':'application/json'},
       body:JSON.stringify({message:msg})});
-    if(r.ok){ inp.value=''; toast('Sent! 🎮'); }
-    else if(r.status===429){ toast('Slow down a sec ⏳'); }
+    if(r.ok){
+      inp.value='';
+      const name = MY_PSN_ID || 'You';
+      showSentFly(MY_AVATAR, name, msg);
+    } else if(r.status===429){ toast('Slow down a sec ⏳'); }
     else toast('Failed ('+r.status+')');
   } catch(e){ toast('Network error'); }
   btn.disabled = false;
@@ -3145,6 +3205,13 @@ async function loadSquad(){
   try {
     const {squad=[]}=await (await fetch('/api/squad')).json();
     SQUAD=squad;
+    // Resolve avatars for the sent-flyout animation.
+    if (MY_PSN_ID) {
+      const me = squad.find(m=>(m.online_id||'').toLowerCase()===MY_PSN_ID.toLowerCase());
+      if (me?.avatar) MY_AVATAR = me.avatar;
+    }
+    const mod = squad.find(m=>(m.online_id||'').toLowerCase()==='crcmz-mod');
+    if (mod?.avatar) MOD_AVATAR = mod.avatar;
     const playing=squad.filter(m=>m.playing).length;
     $('livecount').innerHTML = playing ? ('<b>'+playing+'</b> 🎮 in a game') : 'nobody in a game';
     // On-a-game members float to the top.
