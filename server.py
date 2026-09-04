@@ -1076,6 +1076,78 @@ async def passkey_complete(request: Request, next: str = "/"):
     return resp
 
 
+@app.post("/auth/passkey/register/begin")
+async def passkey_register_begin(request: Request):
+    """Start passkey registration for the logged-in user."""
+    session = _get_session(request)
+    if not session:
+        return JSONResponse({"error": "not authenticated"}, status_code=401)
+    user_id = session.get("sub", "")
+    if not user_id or not ZITADEL_SERVICE_TOKEN:
+        return JSONResponse({"error": "not configured"}, status_code=503)
+
+    import httpx as _hx
+    try:
+        async with _hx.AsyncClient(timeout=15) as c:
+            r = await c.post(
+                f"{ZITADEL_ISSUER}/v2/users/{user_id}/passkeys",
+                json={"returnCode": {}},
+                headers={"Authorization": f"Bearer {ZITADEL_SERVICE_TOKEN}"},
+            )
+        if r.status_code not in (200, 201):
+            logger.warning("passkey/register/begin: %s %s", r.status_code, r.text[:200])
+            return JSONResponse({"error": "failed to initiate"}, status_code=500)
+        d = r.json()
+        passkey_id = d.get("passkeyId") or d.get("id", "")
+        code       = d.get("code") or {}
+
+        async with _hx.AsyncClient(timeout=15) as c:
+            r2 = await c.post(
+                f"{ZITADEL_ISSUER}/v2/users/{user_id}/passkeys/{passkey_id}/register",
+                json={"code": code, "domain": _PUBLIC_HOST},
+                headers={"Authorization": f"Bearer {ZITADEL_SERVICE_TOKEN}"},
+            )
+        if r2.status_code not in (200, 201):
+            logger.warning("passkey/register/begin options: %s %s", r2.status_code, r2.text[:200])
+            return JSONResponse({"error": "failed to get options"}, status_code=500)
+
+        options = r2.json().get("publicKeyCredentialCreationOptions")
+        return JSONResponse({"passkeyId": passkey_id, "options": options})
+    except Exception as e:
+        logger.error("passkey/register/begin error: %s", e)
+        return JSONResponse({"error": "service unavailable"}, status_code=503)
+
+
+@app.post("/auth/passkey/register/complete")
+async def passkey_register_complete(request: Request):
+    """Verify and store the new passkey credential."""
+    session = _get_session(request)
+    if not session:
+        return JSONResponse({"error": "not authenticated"}, status_code=401)
+    user_id = session.get("sub", "")
+    body = await request.json()
+    passkey_id = body.get("passkeyId", "")
+    credential = body.get("credential")
+    if not user_id or not passkey_id or not credential:
+        return JSONResponse({"error": "missing fields"}, status_code=400)
+
+    import httpx as _hx
+    try:
+        async with _hx.AsyncClient(timeout=15) as c:
+            r = await c.post(
+                f"{ZITADEL_ISSUER}/v2/users/{user_id}/passkeys/{passkey_id}/verify",
+                json={"publicKeyCredential": credential},
+                headers={"Authorization": f"Bearer {ZITADEL_SERVICE_TOKEN}"},
+            )
+        if r.status_code not in (200, 201):
+            logger.warning("passkey/register/complete: %s %s", r.status_code, r.text[:200])
+            return JSONResponse({"error": "registration failed"}, status_code=400)
+        return JSONResponse({"ok": True})
+    except Exception as e:
+        logger.error("passkey/register/complete error: %s", e)
+        return JSONResponse({"error": "service unavailable"}, status_code=503)
+
+
 @app.get("/auth/logout")
 async def auth_logout():
     resp = RedirectResponse(url="/auth/login", status_code=302)
@@ -2042,6 +2114,7 @@ def _dashboard_html(user_email: str = "") -> str:
             '<button class="user-btn" id="userBtn" onclick="toggleUserMenu()" aria-label="Account">👤</button>'
             '<div class="user-drop" id="userMenu">'
             f'<div class="ud-name">{disp}</div>'
+            '<button class="ud-item" style="width:100%;border:none;cursor:pointer;margin-bottom:6px" onclick="registerPasskey()">🔑 Add passkey</button>'
             '<a class="ud-item" href="/auth/logout">Sign out</a>'
             '</div>'
         )
@@ -2687,5 +2760,47 @@ document.addEventListener('click', e => {
   if(btn && menu && !btn.contains(e.target) && !menu.contains(e.target))
     menu.classList.remove('open');
 });
+
+// ── Passkey registration ────────────────────────────────────────────────────
+function _b64url(buf){
+  return btoa(String.fromCharCode(...new Uint8Array(buf)))
+    .replace(/\+/g,'-').replace(/\//g,'_').replace(/=/g,'');
+}
+function _fromB64url(s){
+  const pad='='.repeat((4-s.length%4)%4);
+  return Uint8Array.from(atob((s+pad).replace(/-/g,'+').replace(/_/g,'/')),c=>c.charCodeAt(0)).buffer;
+}
+async function registerPasskey(){
+  if(!window.PublicKeyCredential){ toast('Passkeys not supported in this browser'); return; }
+  $('userMenu')?.classList.remove('open');
+  toast('Starting passkey setup…');
+  try {
+    const br = await fetch('/auth/passkey/register/begin',{method:'POST'});
+    if(!br.ok){ toast('Setup failed: '+(await br.json()).error); return; }
+    const {passkeyId, options} = await br.json();
+
+    options.challenge = _fromB64url(options.challenge);
+    options.user.id   = _fromB64url(options.user.id);
+    if(options.excludeCredentials)
+      options.excludeCredentials = options.excludeCredentials.map(c=>({...c,id:_fromB64url(c.id)}));
+
+    const cred = await navigator.credentials.create({publicKey: options});
+    const credential = {
+      id: cred.id, rawId: _b64url(cred.rawId), type: cred.type,
+      response: {
+        clientDataJSON:   _b64url(cred.response.clientDataJSON),
+        attestationObject:_b64url(cred.response.attestationObject),
+      },
+    };
+
+    const cr = await fetch('/auth/passkey/register/complete',{
+      method:'POST', headers:{'Content-Type':'application/json'},
+      body: JSON.stringify({passkeyId, credential}),
+    });
+    toast(cr.ok ? '🔑 Passkey added! Use it next time you sign in.' : 'Registration failed');
+  } catch(e){
+    if(e.name !== 'NotAllowedError') toast('Passkey error: '+e.message);
+  }
+}
 </script>
 </body></html>"""
