@@ -120,7 +120,8 @@ def health():
 
 
 _FAVICON_PATH = Path(__file__).parent / "favicon.png"
-_LOGO_PATH    = Path(__file__).parent / "crcmz-logo.png"
+_LOGO_PATH         = Path(__file__).parent / "crcmz-logo.png"
+_FOOTER_AVATAR_PATH = Path(__file__).parent / "footer-avatar.png"
 
 @app.get("/favicon.png", include_in_schema=False)
 def favicon():
@@ -133,6 +134,13 @@ def favicon():
 def crcmz_logo():
     if _LOGO_PATH.exists():
         return Response(_LOGO_PATH.read_bytes(), media_type="image/png",
+                        headers={"Cache-Control": "public, max-age=86400"})
+    return Response(status_code=404)
+
+@app.get("/footer-avatar.png", include_in_schema=False)
+def footer_avatar():
+    if _FOOTER_AVATAR_PATH.exists():
+        return Response(_FOOTER_AVATAR_PATH.read_bytes(), media_type="image/png",
                         headers={"Cache-Control": "public, max-age=86400"})
     return Response(status_code=404)
 
@@ -549,7 +557,7 @@ def _portal_page(error: str = "", ok: str = "") -> str:
 <div class="grain"></div>
 <div class="card">
   <div class="brand">
-    <img src="/crcmz-logo.png" class="logo" alt="CRCMZ" style="object-fit:contain;border-radius:14px;">
+    <img src="/footer-avatar.png" class="logo" alt="CRCMZ" style="object-fit:cover;border-radius:50%;">
     <div><h1>Link your PlayStation</h1>
       <p class="tag">One quick setup — then never again.</p></div>
   </div>
@@ -796,7 +804,7 @@ def _login_page(error: str = "", next: str = "/") -> str:
 </style></head>
 <body><div class="card">
   <div class="brand">
-    <img src="/crcmz-logo.png" class="logo" alt="CRCMZ" style="object-fit:contain;border-radius:14px;">
+    <img src="/footer-avatar.png" class="logo" alt="CRCMZ" style="object-fit:cover;border-radius:50%;">
     <div><h1>CRCMZ APP</h1><p class="sub">Yes. We have one.</p></div>
   </div>
   {err_html}
@@ -3361,7 +3369,7 @@ _DASHBOARD_TMPL = r"""<!doctype html>
 
 <div class="wrap">
   <div class="top">
-    <img src="/crcmz-logo.png" class="logo" alt="CRCMZ" style="object-fit:contain;border-radius:13px;">
+    <img src="/footer-avatar.png" class="logo" alt="CRCMZ" style="object-fit:contain;border-radius:13px;">
     <div><h1>CRCMZ APP</h1><p class="tag">Yes. We have one.</p></div>
     <div style="margin-left:auto;display:flex;align-items:center;gap:10px">
       <div class="live" id="livecount"></div>
@@ -3379,7 +3387,6 @@ _DASHBOARD_TMPL = r"""<!doctype html>
     </button>
     <div class="nav-dropdown" id="navDropdown">
       <button class="nav-item on" data-p="squad" data-icon="🎮" data-label="Squad" onclick="tab(this)"><span class="nav-i-icon">🎮</span><span>Squad</span></button>
-      <button class="nav-item" data-p="lb" data-icon="🏆" data-label="Ranks" onclick="tab(this)"><span class="nav-i-icon">🏆</span><span>Ranks</span></button>
       <button class="nav-item" data-p="pipeline" data-icon="🎬" data-label="Clips" onclick="tab(this)"><span class="nav-i-icon">🎬</span><span>Clips</span></button>
       <button class="nav-item" data-p="slap" data-icon="🎵" data-label="Slap" onclick="tab(this);loadSlap()"><span class="nav-i-icon">🎵</span><span>Slap</span></button>
       <button class="nav-item" data-p="wa" data-icon="💬" data-label="WhatsApp" onclick="tab(this);loadWa()"><span class="nav-i-icon">💬</span><span>WhatsApp</span></button>
@@ -3399,8 +3406,10 @@ _DASHBOARD_TMPL = r"""<!doctype html>
     </div>
     <div class="statgrid" id="statgrid"></div>
     <div class="card" id="squad"><div class="spin">Loading squad…</div></div>
+    <p class="pip-title" style="margin:18px 0 8px">🏆 Ranks</p>
+    <div class="card" id="lb"><div class="spin">Loading ranks…</div></div>
   </div>
-  <div class="panel" id="p-lb"><div class="card" id="lb"><div class="spin">Loading leaderboard…</div></div></div>
+  <div class="panel" id="p-lb" style="display:none"></div>
   <div class="panel" id="p-pipeline"><div id="pipeline-inner"><div class="spin">Loading pipeline…</div></div></div>
   <div class="panel" id="p-slap">
     <div id="slap-stats" class="statgrid" style="margin-bottom:10px"></div>
@@ -3710,7 +3719,7 @@ function closeNav(){
 document.addEventListener('click', e=>{
   if(!e.target.closest('#navWrap')) closeNav();
 });
-function tab(btn){
+function tab(btn, skipHash){
   document.querySelectorAll('.nav-item').forEach(t=>t.classList.remove('on'));
   document.querySelectorAll('.panel').forEach(p=>p.classList.remove('on'));
   btn.classList.add('on');
@@ -3719,9 +3728,23 @@ function tab(btn){
   const icon=$('navActiveIcon'), lbl=$('navActiveLabel');
   if(icon) icon.textContent = btn.dataset.icon||'';
   if(lbl)  lbl.textContent  = btn.dataset.label||'';
+  // update URL hash so the view is shareable / linkable
+  if(!skipHash) history.replaceState(null,'','#'+btn.dataset.p);
   // close dropdown with a slight delay so user sees selection
   setTimeout(closeNav, 120);
 }
+// restore tab from URL hash on load
+(function(){
+  const hash = location.hash.replace('#','');
+  if(hash){
+    const btn = document.querySelector('.nav-item[data-p="'+hash+'"]');
+    if(btn){
+      tab(btn, true);
+      if(hash==='slap') loadSlap();
+      if(hash==='wa')   loadWa();
+    }
+  }
+})();
 function fmtLast(iso){ if(!iso) return 'offline';
   const s=(Date.now()-new Date(iso))/1000;
   if(s<3600) return Math.max(1,Math.floor(s/60))+'m ago';
