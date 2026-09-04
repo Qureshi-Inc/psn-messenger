@@ -824,14 +824,13 @@ def _login_page(error: str = "", next: str = "/") -> str:
   async function passkeyLogin() {{
     if (!window.PublicKeyCredential) {{ showErr('Passkeys not supported in this browser.'); return; }}
     const identifier = document.getElementById('em').value.trim();
-    if (!identifier) {{ showErr('Enter your email or username first.'); return; }}
     const btn = document.getElementById('pkBtn');
     btn.disabled = true; btn.textContent = '🔑 Waiting for passkey…';
     try {{
-      // 1. Get challenge
+      // 1. Get challenge — if no email typed, use usernameless discoverable flow
       const br = await fetch('/auth/passkey/begin',{{
         method:'POST', headers:{{'Content-Type':'application/json'}},
-        body: JSON.stringify({{identifier}})
+        body: JSON.stringify(identifier ? {{identifier}} : {{}})
       }});
       if (!br.ok) {{ showErr((await br.json()).error || 'User not found.'); return; }}
       const {{sessionId, options}} = await br.json();
@@ -1032,57 +1031,65 @@ async def auth_callback(request: Request, code: str = "", state: str = "", error
 
 @app.post("/auth/passkey/begin")
 async def passkey_begin(request: Request):
-    """Step 1: resolve user → ask Zitadel for a WebAuthn challenge."""
+    """Step 1: ask Zitadel for a WebAuthn challenge.
+
+    With identifier: user-specific flow — allowCredentials is scoped to that account.
+    Without identifier: usernameless/discoverable flow — browser shows OS passkey picker,
+    no email entry required.
+    """
     if not ZITADEL_SERVICE_TOKEN:
         return JSONResponse({"error": "not configured"}, status_code=503)
     body = await request.json()
     identifier = (body.get("identifier") or "").strip()
-    if not identifier:
-        return JSONResponse({"error": "identifier required"}, status_code=400)
 
     import httpx as _hx
 
-    async def _resolve(ident: str) -> str:
-        if "@" not in ident:
-            return ident
-        try:
-            async with _hx.AsyncClient(timeout=10) as c:
-                sr = await c.post(
-                    f"{ZITADEL_ISSUER}/management/v1/users/_search",
-                    json={"queries": [{"emailQuery": {"emailAddress": ident,
-                                                      "method": "TEXT_QUERY_METHOD_EQUALS"}}]},
-                    headers={"Authorization": f"Bearer {ZITADEL_SERVICE_TOKEN}"},
-                )
-            if sr.status_code == 200:
-                results = sr.json().get("result", [])
-                if results:
-                    return results[0].get("preferredLoginName", ident)
-        except Exception:
-            pass
-        return ident
+    domain = ZITADEL_ISSUER.replace("https://", "").replace("http://", "").rstrip("/")
+    webauthn_challenge = {
+        "domain": domain,
+        "userVerificationRequirement": "USER_VERIFICATION_REQUIREMENT_REQUIRED",
+    }
 
-    login_name = await _resolve(identifier)
+    if identifier:
+        # Resolve email → loginName if needed.
+        login_name = identifier
+        if "@" in identifier:
+            try:
+                async with _hx.AsyncClient(timeout=10) as c:
+                    sr = await c.post(
+                        f"{ZITADEL_ISSUER}/management/v1/users/_search",
+                        json={"queries": [{"emailQuery": {"emailAddress": identifier,
+                                                          "method": "TEXT_QUERY_METHOD_EQUALS"}}]},
+                        headers={"Authorization": f"Bearer {ZITADEL_SERVICE_TOKEN}"},
+                    )
+                if sr.status_code == 200:
+                    results = sr.json().get("result", [])
+                    if results:
+                        login_name = results[0].get("preferredLoginName", identifier)
+            except Exception:
+                pass
+        session_body = {
+            "checks": {"user": {"loginName": login_name}},
+            "challenges": {"webAuthN": webauthn_challenge},
+        }
+    else:
+        # Usernameless: no user check → empty allowCredentials → OS passkey picker.
+        session_body = {"challenges": {"webAuthN": webauthn_challenge}}
+
     try:
         async with _hx.AsyncClient(timeout=15) as c:
             r = await c.post(
                 f"{ZITADEL_ISSUER}/v2/sessions",
-                json={
-                    "checks": {"user": {"loginName": login_name}},
-                    "challenges": {"webAuthN": {
-                        "domain": ZITADEL_ISSUER.replace("https://", "").replace("http://", "").rstrip("/"),
-                        "userVerificationRequirement": "USER_VERIFICATION_REQUIREMENT_REQUIRED",
-                    }},
-                },
+                json=session_body,
                 headers={"Authorization": f"Bearer {ZITADEL_SERVICE_TOKEN}"},
             )
         if r.status_code not in (200, 201):
-            logger.warning("passkey/begin: %s for loginName=%s", r.status_code, login_name)
-            return JSONResponse({"error": "user not found"}, status_code=404)
+            logger.warning("passkey/begin: %s body=%s", r.status_code, r.text[:200])
+            return JSONResponse({"error": "could not start passkey flow"}, status_code=404)
         data = r.json()
         raw = data.get("challenges", {}).get("webAuthN", {}).get("publicKeyCredentialRequestOptions")
         if not raw:
             return JSONResponse({"error": "no webauthn challenge returned"}, status_code=500)
-        # Zitadel wraps request options as {"publicKey": {...}} — unwrap like creation options.
         options = raw.get("publicKey") or raw
         return JSONResponse({"sessionId": data["sessionId"], "options": options})
     except Exception as e:
