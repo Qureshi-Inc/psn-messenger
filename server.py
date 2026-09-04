@@ -2580,9 +2580,14 @@ _DASHBOARD_TMPL = r"""<!doctype html>
   .board-toggle-btn .chev { transition:transform .25s ease; font-size:13px; }
   .board-wrap.collapsed .chev { transform:rotate(-90deg); }
   /* hint shown briefly under the title to teach the toggle */
-  .board-hint { font-size:10px; color:var(--dim); text-align:center; margin:-4px 0 6px;
-    opacity:0; animation:hintfade 4s ease 1.2s forwards; pointer-events:none; }
-  @keyframes hintfade { 0%{opacity:0} 15%{opacity:.5} 85%{opacity:.5} 100%{opacity:0} }
+  .board-hint { font-size:10px; color:var(--dim); text-align:center;
+    overflow:hidden; pointer-events:none;
+    animation:hintfade 10s ease 1s both; }
+  @keyframes hintfade {
+    0%  { opacity:0;   max-height:22px; margin:0 0 6px }
+    8%  { opacity:.48; max-height:22px; margin:0 0 6px }
+    80% { opacity:.48; max-height:22px; margin:0 0 6px }
+    100%{ opacity:0;   max-height:0;    margin:0 } }
   .board { display:grid; grid-template-columns:repeat(3,1fr); gap:8px;
     max-height:52vh; overflow-y:auto; -webkit-overflow-scrolling:touch;
     transition:max-height .28s ease, opacity .2s ease, margin .28s ease; }
@@ -3173,44 +3178,55 @@ function _saveOrder(){
   try{ localStorage.setItem('cb_order', JSON.stringify(BUTTONS.map(b=>b.label))); }catch(e){}
 }
 
-// ── Drag-to-reorder (touch + mouse) ─────────────────────────────────────────
-let _drag = null;
+// ── Drag-to-reorder ──────────────────────────────────────────────────────────
+// Global handlers (added once) so pointer capture stays reliable on mobile.
+let _drag = null, _dragRaf = null;
+document.addEventListener('pointermove', ev=>{
+  if(!_drag) return;
+  ev.preventDefault();
+  const x = ev.clientX - _drag.ox, y = ev.clientY - _drag.oy;
+  if(_dragRaf) cancelAnimationFrame(_dragRaf);
+  _dragRaf = requestAnimationFrame(()=>{
+    if(!_drag) return;
+    _drag.clone.style.left = x+'px';
+    _drag.clone.style.top  = y+'px';
+    const btns=[...document.querySelectorAll('.snd:not(.drag-ghost)')];
+    let ci=-1, cd=Infinity;
+    btns.forEach((b,i)=>{
+      const r=b.getBoundingClientRect(),cx=r.left+r.width/2,cy=r.top+r.height/2;
+      const d=Math.hypot(ev.clientX-cx, ev.clientY-cy);
+      if(d<cd){cd=d;ci=parseInt(b.dataset.i);}
+    });
+    if(ci!==_drag.cur){
+      document.querySelectorAll('.snd').forEach(b=>b.classList.toggle('drop-target',parseInt(b.dataset.i)===ci&&ci!==_drag.idx));
+      _drag.cur=ci;
+    }
+  });
+},{passive:false});
+document.addEventListener('pointerup', ()=>{
+  if(!_drag) return;
+  if(_dragRaf) cancelAnimationFrame(_dragRaf);
+  _drag.clone.remove();
+  document.querySelectorAll('.snd').forEach(b=>b.classList.remove('drag-ghost','drop-target'));
+  const from=_drag.idx, to=_drag.cur;
+  _drag=null;
+  if(to>=0 && to!==from){
+    const [item]=BUTTONS.splice(from,1);
+    BUTTONS.splice(to,0,item);
+    renderButtons();
+  }
+});
 function bindDrag(){
   document.querySelectorAll('.snd').forEach((el,idx)=>{
     el.addEventListener('pointerdown', ev=>{
-      el.setPointerCapture(ev.pointerId);
-      const r = el.getBoundingClientRect();
-      const clone = el.cloneNode(true);
-      clone.style.cssText = 'position:fixed;left:'+r.left+'px;top:'+r.top+'px;width:'+r.width+'px;height:'+r.height+'px;z-index:999;opacity:.88;pointer-events:none;border-radius:13px;transition:none';
+      ev.preventDefault();
+      const r=el.getBoundingClientRect();
+      const clone=el.cloneNode(true);
+      clone.style.cssText='position:fixed;left:'+r.left+'px;top:'+r.top+'px;width:'+r.width+'px;height:'+r.height+'px;z-index:999;opacity:.88;pointer-events:none;border-radius:13px;box-shadow:0 8px 32px rgba(0,0,0,.6);will-change:left,top';
       document.body.appendChild(clone);
-      _drag = { idx, clone, ox: ev.clientX-r.left, oy: ev.clientY-r.top, cur: idx };
       el.classList.add('drag-ghost');
-    },{passive:true});
-    el.addEventListener('pointermove', ev=>{
-      if(!_drag || _drag.idx!==idx) return;
-      _drag.clone.style.left = (ev.clientX-_drag.ox)+'px';
-      _drag.clone.style.top  = (ev.clientY-_drag.oy)+'px';
-      // find closest button
-      const btns=[...document.querySelectorAll('.snd')];
-      let ci=-1, cd=Infinity;
-      btns.forEach((b,i)=>{ const r=b.getBoundingClientRect(),cx=r.left+r.width/2,cy=r.top+r.height/2,d=Math.hypot(ev.clientX-cx,ev.clientY-cy);
-        if(d<cd){cd=d;ci=i;} });
-      if(ci!==_drag.cur){
-        btns.forEach((b,i)=>b.classList.toggle('drop-target',i===ci&&i!==_drag.idx));
-        _drag.cur=ci;
-      }
-    },{passive:true});
-    el.addEventListener('pointerup', ()=>{
-      if(!_drag || _drag.idx!==idx) return;
-      _drag.clone.remove();
-      document.querySelectorAll('.snd').forEach(b=>{ b.classList.remove('drag-ghost','drop-target'); });
-      if(_drag.cur !== _drag.idx && _drag.cur >= 0){
-        const [item] = BUTTONS.splice(_drag.idx, 1);
-        BUTTONS.splice(_drag.cur, 0, item);
-        renderButtons();
-      }
-      _drag = null;
-    },{passive:true});
+      _drag={idx, clone, ox:ev.clientX-r.left, oy:ev.clientY-r.top, cur:idx};
+    });
   });
 }
 
