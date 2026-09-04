@@ -2573,8 +2573,8 @@ _DASHBOARD_TMPL = r"""<!doctype html>
     border-radius:9px; background:none; color:var(--cyan); cursor:pointer; font-size:15px;
     display:grid; place-items:center; transition:background .12s, border-color .12s; }
   .board-fs-btn:active { background:rgba(34,230,255,.18); }
-  .board-toggle-btn { flex:1; display:flex; align-items:center; justify-content:space-between;
-    font-size:12px; letter-spacing:2px; color:var(--cyan); text-transform:uppercase;
+  .board-toggle-btn { flex:1; display:flex; align-items:center; gap:7px;
+    font-size:10.5px; letter-spacing:2px; color:var(--cyan); text-transform:uppercase;
     font-weight:700; padding:4px 4px; background:none; border:none; cursor:pointer;
     font-family:"Orbitron",sans-serif; text-shadow:0 0 10px rgba(34,230,255,.4); }
   .board-toggle-btn .chev { transition:transform .25s ease; font-size:13px; }
@@ -3087,10 +3087,10 @@ _DASHBOARD_TMPL = r"""<!doctype html>
 
 <div class="board-wrap" id="boardWrap">
   <div class="board-hdr">
-    <button class="board-fs-btn" id="boardFsBtn" onclick="toggleBoardFs()" title="Fullscreen">⛶</button>
     <button class="board-toggle-btn" onclick="toggleBoard()">
-      <span>Chat Board</span><span class="chev" id="chev">▾</span>
+      <span class="chev" id="chev">▾</span><span>Chat Board</span>
     </button>
+    <button class="board-fs-btn" id="boardFsBtn" onclick="toggleBoardFs()" title="Fullscreen">⛶</button>
   </div>
   <div class="board-hint" id="boardHint">tap title to minimize · hold in fullscreen to organize</div>
   <div class="board" id="board"></div>
