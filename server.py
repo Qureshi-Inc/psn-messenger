@@ -786,7 +786,7 @@ def _login_page(error: str = "", next: str = "/") -> str:
   {err_html}
   <form method="post" action="/auth/login?next={safe_next}" id="f">
     <label for="em">Email or username</label>
-    <input type="text" name="email" id="em" required autocomplete="username"
+    <input type="text" name="email" id="em" autocomplete="username webauthn"
       placeholder="Email or username" inputmode="email">
     <label for="pw">Password</label>
     <input type="password" name="pw" id="pw" required autocomplete="current-password"
@@ -821,48 +821,80 @@ def _login_page(error: str = "", next: str = "/") -> str:
     return Uint8Array.from(atob(b64),c=>c.charCodeAt(0)).buffer;
   }}
 
+  // Shared: send assertion to server and redirect on success.
+  async function _completePasskey(sessionId, cred) {{
+    const assertion = {{
+      id: cred.id, rawId: b64url(cred.rawId), type: cred.type,
+      response: {{
+        clientDataJSON:    b64url(cred.response.clientDataJSON),
+        authenticatorData: b64url(cred.response.authenticatorData),
+        signature:         b64url(cred.response.signature),
+        userHandle: cred.response.userHandle ? b64url(cred.response.userHandle) : null,
+      }},
+    }};
+    const cr = await fetch('/auth/passkey/complete?next='+encodeURIComponent(nextUrl),{{
+      method:'POST', headers:{{'Content-Type':'application/json'}},
+      body: JSON.stringify({{sessionId, assertion}})
+    }});
+    if (!cr.ok) {{ showErr((await cr.json()).error || 'Passkey verification failed.'); return false; }}
+    const {{next}} = await cr.json();
+    window.location.href = next;
+    return true;
+  }}
+
+  // Fetch a challenge from the server and decode it.
+  async function _beginPasskey(identifier) {{
+    const br = await fetch('/auth/passkey/begin',{{
+      method:'POST', headers:{{'Content-Type':'application/json'}},
+      body: JSON.stringify(identifier ? {{identifier}} : {{}})
+    }});
+    if (!br.ok) {{ showErr((await br.json()).error || 'Could not start passkey flow.'); return null; }}
+    const {{sessionId, options}} = await br.json();
+    options.challenge = fromB64url(options.challenge);
+    if (options.allowCredentials)
+      options.allowCredentials = options.allowCredentials.map(c=>
+        ({{...c, id: fromB64url(c.id)}}));
+    return {{sessionId, options}};
+  }}
+
+  // Conditional UI: starts silently on page load. The browser shows the passkey
+  // as an autocomplete suggestion in the email field — user just taps it, no
+  // button press needed. Aborted if the user clicks the explicit button instead.
+  let _conditionalAbort = null;
+  async function _startConditional() {{
+    if (!window.PublicKeyCredential) return;
+    const supported = await PublicKeyCredential.isConditionalMediationAvailable?.() ?? false;
+    if (!supported) return;
+    const began = await _beginPasskey('');
+    if (!began) return;
+    _conditionalAbort = new AbortController();
+    try {{
+      const cred = await navigator.credentials.get({{
+        publicKey: began.options,
+        mediation: 'conditional',
+        signal: _conditionalAbort.signal,
+      }});
+      await _completePasskey(began.sessionId, cred);
+    }} catch(e) {{
+      // AbortError = user clicked the explicit button instead; anything else is unexpected.
+      if (e.name !== 'AbortError' && e.name !== 'NotAllowedError')
+        console.warn('conditional passkey error:', e);
+    }}
+  }}
+  _startConditional();
+
+  // Explicit button: abort any pending conditional request, then show the picker immediately.
   async function passkeyLogin() {{
     if (!window.PublicKeyCredential) {{ showErr('Passkeys not supported in this browser.'); return; }}
+    if (_conditionalAbort) {{ _conditionalAbort.abort(); _conditionalAbort = null; }}
     const identifier = document.getElementById('em').value.trim();
     const btn = document.getElementById('pkBtn');
     btn.disabled = true; btn.textContent = '🔑 Waiting for passkey…';
     try {{
-      // 1. Get challenge — if no email typed, use usernameless discoverable flow
-      const br = await fetch('/auth/passkey/begin',{{
-        method:'POST', headers:{{'Content-Type':'application/json'}},
-        body: JSON.stringify(identifier ? {{identifier}} : {{}})
-      }});
-      if (!br.ok) {{ showErr((await br.json()).error || 'User not found.'); return; }}
-      const {{sessionId, options}} = await br.json();
-
-      // 2. Prep options (base64url → ArrayBuffer)
-      options.challenge = fromB64url(options.challenge);
-      if (options.allowCredentials)
-        options.allowCredentials = options.allowCredentials.map(c=>
-          ({{...c, id: fromB64url(c.id)}}));
-
-      // 3. Browser passkey ceremony
-      const cred = await navigator.credentials.get({{publicKey: options}});
-
-      // 4. Build assertion (ArrayBuffer → base64url)
-      const assertion = {{
-        id: cred.id, rawId: b64url(cred.rawId), type: cred.type,
-        response: {{
-          clientDataJSON:    b64url(cred.response.clientDataJSON),
-          authenticatorData: b64url(cred.response.authenticatorData),
-          signature:         b64url(cred.response.signature),
-          userHandle: cred.response.userHandle ? b64url(cred.response.userHandle) : null,
-        }},
-      }};
-
-      // 5. Verify
-      const cr = await fetch('/auth/passkey/complete?next='+encodeURIComponent(nextUrl),{{
-        method:'POST', headers:{{'Content-Type':'application/json'}},
-        body: JSON.stringify({{sessionId, assertion}})
-      }});
-      if (!cr.ok) {{ showErr((await cr.json()).error || 'Passkey verification failed.'); return; }}
-      const {{next}} = await cr.json();
-      window.location.href = next;
+      const began = await _beginPasskey(identifier);
+      if (!began) return;
+      const cred = await navigator.credentials.get({{publicKey: began.options}});
+      await _completePasskey(began.sessionId, cred);
     }} catch(e) {{
       if (e.name !== 'NotAllowedError') showErr('Passkey error: '+e.message);
     }} finally {{
