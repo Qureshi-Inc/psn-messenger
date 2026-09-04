@@ -196,8 +196,15 @@ def v2_send_message(req: MessageRequest, request: Request):
         if session:
             user_token = portal_mod.get_fresh_access_token(session.get("sub", ""))
         if user_token:
-            user_messenger = PSNMessenger(_DirectAuth(user_token), GROUP_ID)
-            success = user_messenger.send_message(req.message.strip())
+            try:
+                user_messenger = PSNMessenger(_DirectAuth(user_token), GROUP_ID)
+                success = user_messenger.send_message(req.message.strip())
+            except Exception as ue:
+                logger.warning("v2: user-token send failed (%s), falling back to server account", ue)
+                success = False
+            if not success:
+                # User's PSN account may not be in this group — fall back to server account.
+                success = psn_messenger.send_message(req.message.strip())
         else:
             success = psn_messenger.send_message(req.message.strip())
         if success:
@@ -843,12 +850,16 @@ def _login_page(error: str = "", next: str = "/") -> str:
   }}
 
   // Fetch a challenge from the server and decode it.
-  async function _beginPasskey(identifier) {{
+  // silent=true suppresses the visible error (used by conditional background flow).
+  async function _beginPasskey(identifier, silent=false) {{
     const br = await fetch('/auth/passkey/begin',{{
       method:'POST', headers:{{'Content-Type':'application/json'}},
       body: JSON.stringify(identifier ? {{identifier}} : {{}})
     }});
-    if (!br.ok) {{ showErr((await br.json()).error || 'Could not start passkey flow.'); return null; }}
+    if (!br.ok) {{
+      if (!silent) showErr((await br.json()).error || 'Could not start passkey flow.');
+      return null;
+    }}
     const {{sessionId, options}} = await br.json();
     options.challenge = fromB64url(options.challenge);
     if (options.allowCredentials)
@@ -865,7 +876,7 @@ def _login_page(error: str = "", next: str = "/") -> str:
     if (!window.PublicKeyCredential) return;
     const supported = await PublicKeyCredential.isConditionalMediationAvailable?.() ?? false;
     if (!supported) return;
-    const began = await _beginPasskey('');
+    const began = await _beginPasskey('', true);  // silent — no error shown on page load
     if (!began) return;
     _conditionalAbort = new AbortController();
     try {{
