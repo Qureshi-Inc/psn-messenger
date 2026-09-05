@@ -34,12 +34,17 @@ if not NPSSO_TOKEN:
 if not GROUP_ID:
     raise RuntimeError("GROUP_ID environment variable is required")
 
-psnawp = PSNAWP(NPSSO_TOKEN)
-client = psnawp.me()
-logger.info(f"Authenticated as: {client.online_id}")
-
-group = psnawp.group(group_id=GROUP_ID)
-logger.info(f"Connected to group: {GROUP_ID}")
+try:
+    psnawp = PSNAWP(NPSSO_TOKEN)
+    client = psnawp.me()
+    logger.info(f"Authenticated as: {client.online_id}")
+    group = psnawp.group(group_id=GROUP_ID)
+    logger.info(f"Connected to group: {GROUP_ID}")
+except Exception as _psnawp_err:
+    logger.warning(f"psnawp init failed (legacy /send+/messages disabled): {_psnawp_err}")
+    psnawp = None
+    client = None
+    group = None
 
 app = FastAPI(title="PSN Messenger")
 
@@ -149,6 +154,8 @@ def footer_avatar():
 def send_message(req: MessageRequest):
     if not req.message.strip():
         raise HTTPException(status_code=400, detail="Message cannot be empty")
+    if group is None:
+        raise HTTPException(status_code=503, detail="Legacy PSN client unavailable")
     try:
         group.send_message(req.message.strip())
         logger.info(f"Message sent: {req.message[:50]}")
@@ -160,6 +167,8 @@ def send_message(req: MessageRequest):
 
 @app.get("/messages")
 def get_messages(limit: int = 5):
+    if group is None:
+        raise HTTPException(status_code=503, detail="Legacy PSN client unavailable")
     try:
         conversation = group.get_conversation(limit)
         messages = []
