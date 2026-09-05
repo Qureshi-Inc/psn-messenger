@@ -1592,11 +1592,26 @@ async def giveaway_state(request: Request):
     is_admin = await _is_iam_admin(user_id)
     state = await asyncio.to_thread(_giveaway.get_state)
     state["is_admin"] = is_admin
+    # Reveal winner only on/after draw date (admins always see it)
+    draw_date = state.get("draw_date", "")
+    today = __import__("datetime").date.today().isoformat()
+    state["winner_revealed"] = is_admin or (bool(draw_date) and today >= draw_date and bool(state.get("latest_winner")))
+    if not is_admin and not state["winner_revealed"]:
+        state["latest_winner"] = None
     if is_admin:
         pool_ids = {m["id"] for m in state.get("pool_members", [])}
         all_members = await asyncio.to_thread(_portal_members)
         state["available_members"] = [m for m in all_members if m["id"] not in pool_ids]
     return JSONResponse(state)
+
+@app.post("/api/giveaway/draw-date")
+async def giveaway_set_draw_date(request: Request):
+    session = _get_session(request)
+    if not session or not await _is_iam_admin(session.get("sub", "")):
+        raise HTTPException(status_code=403, detail="giveaway admin only")
+    body = await request.json()
+    result = await asyncio.to_thread(_giveaway.set_draw_date, body.get("draw_date", ""))
+    return JSONResponse(result)
 
 @app.get("/api/giveaway/history")
 async def giveaway_history(request: Request):
@@ -3262,23 +3277,42 @@ _DASHBOARD_TMPL = r"""<!doctype html>
   @media(max-width:600px){ .wa-word-grid { grid-template-columns:1fr; } }
 
   /* ── Giveaway ── */
-  .giveaway-winner { background:linear-gradient(135deg,rgba(255,47,214,.1),rgba(157,92,255,.1));
-    border:1px solid rgba(255,47,214,.25); border-radius:16px; padding:20px;
-    text-align:center; margin-bottom:14px; }
-  .giveaway-winner .gw-label { font-size:11px; text-transform:uppercase; letter-spacing:.08em;
-    color:var(--dim); margin-bottom:6px; }
-  .giveaway-winner .gw-name { font-size:28px; font-weight:800;
-    background:linear-gradient(135deg,var(--neon),var(--violet)); -webkit-background-clip:text;
-    -webkit-text-fill-color:transparent; background-clip:text; margin-bottom:4px; }
-  .giveaway-winner .gw-prize { font-size:13px; color:var(--dim); }
-  .giveaway-winner .gw-auto { font-size:12px; color:#ffd700; margin-top:4px; }
+  .gw-card { background:linear-gradient(135deg,rgba(255,47,214,.08),rgba(157,92,255,.08));
+    border:1px solid rgba(255,47,214,.2); border-radius:20px; padding:28px 20px;
+    text-align:center; margin-bottom:14px; position:relative; overflow:hidden; }
+  .gw-card::before { content:''; position:absolute; inset:0;
+    background:radial-gradient(ellipse at 50% 0%,rgba(255,47,214,.15) 0%,transparent 70%);
+    pointer-events:none; }
+  .gw-label { font-size:11px; text-transform:uppercase; letter-spacing:.1em;
+    color:var(--dim); margin-bottom:8px; }
+  .gw-winner-name { font-size:36px; font-weight:900; line-height:1.1;
+    background:linear-gradient(135deg,#fff 0%,var(--neon) 50%,var(--violet) 100%);
+    -webkit-background-clip:text; -webkit-text-fill-color:transparent;
+    background-clip:text; margin-bottom:6px; animation:gwPop .5s cubic-bezier(.34,1.56,.64,1); }
+  @keyframes gwPop { from{transform:scale(.7);opacity:0} to{transform:scale(1);opacity:1} }
+  .gw-prize-badge { display:inline-block; background:linear-gradient(135deg,rgba(255,215,0,.2),rgba(255,165,0,.15));
+    border:1px solid rgba(255,215,0,.35); border-radius:20px; padding:5px 14px;
+    font-size:13px; color:#ffd700; font-weight:600; margin-top:6px; }
+  .gw-auto-badge { font-size:12px; color:#ffd700; margin-top:8px; opacity:.8; }
+  .gw-countdown { padding:24px 20px 20px; }
+  .gw-countdown-title { font-size:12px; text-transform:uppercase; letter-spacing:.08em;
+    color:var(--dim); margin-bottom:16px; }
+  .gw-countdown-title b { color:var(--txt); }
+  .gw-timer { display:flex; justify-content:center; gap:12px; }
+  .gw-unit { display:flex; flex-direction:column; align-items:center; gap:4px; min-width:52px; }
+  .gw-unit-val { font-size:32px; font-weight:900; font-family:'Orbitron',monospace;
+    background:linear-gradient(135deg,var(--neon),var(--violet));
+    -webkit-background-clip:text; -webkit-text-fill-color:transparent; background-clip:text;
+    line-height:1; }
+  .gw-unit-lbl { font-size:10px; text-transform:uppercase; letter-spacing:.08em; color:var(--dim); }
+  .gw-no-date { font-size:14px; color:var(--dim); padding:20px 0; }
   .giveaway-pool { background:rgba(255,255,255,.03); border:1px solid rgba(255,255,255,.07);
     border-radius:14px; padding:16px; margin-bottom:14px; }
   .giveaway-pool .gp-label { font-size:12px; color:var(--dim); margin-bottom:8px; }
-  .giveaway-pool .gp-bar { height:6px; background:rgba(255,255,255,.08); border-radius:3px; overflow:hidden; margin-bottom:8px; }
+  .giveaway-pool .gp-bar { height:5px; background:rgba(255,255,255,.08); border-radius:3px; overflow:hidden; margin-bottom:6px; }
   .giveaway-pool .gp-fill { height:100%; border-radius:3px;
-    background:linear-gradient(90deg,var(--neon),var(--violet)); transition:width .5s ease; }
-  .giveaway-pool .gp-count { font-size:13px; color:var(--txt); }
+    background:linear-gradient(90deg,var(--neon),var(--violet)); transition:width .6s ease; }
+  .giveaway-pool .gp-count { font-size:12px; color:var(--dim); }
   .giveaway-history summary { cursor:pointer; font-size:13px; font-weight:600;
     color:var(--dim); padding:4px 0; list-style:none; display:flex; align-items:center; gap:6px; }
   .giveaway-history summary::before { content:'▸'; transition:transform .2s; }
@@ -3290,20 +3324,26 @@ _DASHBOARD_TMPL = r"""<!doctype html>
   .giveaway-history .gh-meta { font-size:11px; color:var(--dim); }
   .giveaway-admin { background:rgba(255,255,255,.03); border:1px solid rgba(255,47,214,.2);
     border-radius:14px; padding:16px; margin-top:14px; }
-  .giveaway-admin h3 { font-size:13px; font-weight:700; color:var(--neon);
+  .giveaway-admin h3 { font-size:12px; font-weight:700; color:var(--neon);
     text-transform:uppercase; letter-spacing:.06em; margin:0 0 12px; }
-  .giveaway-admin .ga-row { display:flex; gap:8px; margin-bottom:10px; }
-  .giveaway-admin input[type=text] { flex:1; background:rgba(255,255,255,.06);
-    border:1px solid rgba(255,255,255,.12); border-radius:8px; padding:8px 12px;
-    color:var(--txt); font-size:13px; outline:none; }
-  .giveaway-admin input[type=text]:focus { border-color:rgba(255,47,214,.5); }
-  .giveaway-member-list { display:flex; flex-direction:column; gap:4px; margin:8px 0 12px; }
+  .giveaway-admin .ga-row { display:flex; gap:8px; margin-bottom:10px; align-items:center; }
+  .giveaway-admin input[type=text],.giveaway-admin input[type=date] { flex:1;
+    background:rgba(255,255,255,.06); border:1px solid rgba(255,255,255,.12); border-radius:8px;
+    padding:8px 12px; color:var(--txt); font-size:13px; outline:none;
+    color-scheme:dark; }
+  .giveaway-admin input:focus { border-color:rgba(255,47,214,.5); }
+  .gw-test-winner { background:rgba(255,215,0,.08); border:1px solid rgba(255,215,0,.25);
+    border-radius:10px; padding:12px 14px; margin-bottom:12px; font-size:13px; }
+  .gw-test-winner .gwtw-label { font-size:10px; text-transform:uppercase; letter-spacing:.08em;
+    color:rgba(255,215,0,.7); margin-bottom:4px; }
+  .gw-test-winner .gwtw-name { font-size:18px; font-weight:800; color:#ffd700; }
+  .giveaway-member-list { display:flex; flex-direction:column; gap:3px; margin:6px 0 12px; }
   .giveaway-member-list .gm-row { display:flex; justify-content:space-between; align-items:center;
-    padding:7px 10px; background:rgba(255,255,255,.04); border-radius:8px; font-size:13px; }
-  .giveaway-member-list .gm-remove { background:none; border:none; color:rgba(255,80,80,.7);
-    cursor:pointer; font-size:15px; padding:0 4px; line-height:1; }
+    padding:6px 10px; background:rgba(255,255,255,.04); border-radius:8px; font-size:13px; }
+  .giveaway-member-list .gm-remove { background:none; border:none; color:rgba(255,80,80,.6);
+    cursor:pointer; font-size:16px; padding:0 4px; line-height:1; }
   .giveaway-member-list .gm-remove:hover { color:#ff5050; }
-  .ga-btn-danger { padding:8px 14px; border-radius:8px; border:1px solid rgba(255,80,80,.4);
+  .ga-btn-danger { padding:7px 13px; border-radius:8px; border:1px solid rgba(255,80,80,.4);
     background:rgba(255,80,80,.1); color:#ff8080; cursor:pointer; font-size:12px;
     font-weight:600; transition:all .2s; }
   .ga-btn-danger:hover { background:rgba(255,80,80,.2); color:#fff; }
@@ -5150,7 +5190,8 @@ async function waDoImport(){
 }
 
 // ── Giveaway ─────────────────────────────────────────────────────────────────
-let _gwLoaded = false;
+let _gwLoaded = false, _gwCountdownTimer = null, _gwConfettiStop = null;
+
 async function loadGiveaway(){
   if(_gwLoaded) return;
   _gwLoaded = true;
@@ -5161,7 +5202,8 @@ async function loadGiveaway(){
       fetch('/api/giveaway/history').then(r=>r.json()),
     ]);
     el.innerHTML = renderGiveaway(state, history);
-    if(state.is_admin) wireGiveawayAdmin(state);
+    if(state.winner_revealed && state.latest_winner) startConfetti();
+    else if(state.draw_date) startGwCountdown(state.draw_date);
   } catch(e) {
     el.innerHTML = '<div class="spin" style="color:var(--dim)">Failed to load giveaway</div>';
   }
@@ -5170,18 +5212,32 @@ async function loadGiveaway(){
 function renderGiveaway(state, history){
   const w = state.latest_winner;
   const pct = state.total_in_cycle > 0
-    ? Math.round(((state.total_in_cycle - state.pool_remaining) / state.total_in_cycle) * 100)
-    : 0;
-  const prize = state.prize ? `<div class="gw-prize">🎁 Prize: <b>${esc(state.prize)}</b></div>` : '';
-  const autoMsg = w && w.auto ? `<div class="gw-auto">🏆 Last one standing</div>` : '';
-  const winner = w
-    ? `<div class="giveaway-winner">
-        <div class="gw-label">${esc(w.month)} winner · Cycle ${w.cycle}</div>
-        <div class="gw-name">${esc(w.winner)}</div>
-        ${prize}${autoMsg}
-      </div>`
-    : `<div class="giveaway-winner"><div class="gw-label">No draw yet this cycle</div>
-        <div class="gw-name" style="font-size:16px;color:var(--dim)">Draw not run</div></div>`;
+    ? Math.round(((state.total_in_cycle - state.pool_remaining) / state.total_in_cycle) * 100) : 0;
+
+  let mainCard = '';
+  if(state.winner_revealed && w){
+    const prz = w.prize ? `<div class="gw-prize-badge">🎁 ${esc(w.prize)}</div>` : '';
+    const auto = w.auto ? `<div class="gw-auto-badge">🏆 Last one standing</div>` : '';
+    mainCard = `<div class="gw-card">
+      <div class="gw-label">${esc(w.month)} · Cycle ${w.cycle}</div>
+      <div class="gw-winner-name">${esc(w.winner)}</div>
+      ${prz}${auto}
+    </div>`;
+  } else if(state.draw_date){
+    const d = new Date(state.draw_date+'T00:00:00');
+    const fmt = d.toLocaleDateString('en-US',{month:'long',day:'numeric',year:'numeric'});
+    mainCard = `<div class="gw-card gw-countdown">
+      <div class="gw-countdown-title">Next draw — <b>${fmt}</b>${state.prize?` · 🎁 <b>${esc(state.prize)}</b>`:''}</div>
+      <div class="gw-timer" id="gwTimer">
+        <div class="gw-unit"><div class="gw-unit-val" id="gwD">--</div><div class="gw-unit-lbl">Days</div></div>
+        <div class="gw-unit"><div class="gw-unit-val" id="gwH">--</div><div class="gw-unit-lbl">Hrs</div></div>
+        <div class="gw-unit"><div class="gw-unit-val" id="gwM">--</div><div class="gw-unit-lbl">Min</div></div>
+        <div class="gw-unit"><div class="gw-unit-val" id="gwS">--</div><div class="gw-unit-lbl">Sec</div></div>
+      </div>
+    </div>`;
+  } else {
+    mainCard = `<div class="gw-card"><div class="gw-no-date">No draw date set yet.</div></div>`;
+  }
 
   const pool = `<div class="giveaway-pool">
     <div class="gp-label">Cycle ${state.cycle} — ${state.pool_remaining} of ${state.total_in_cycle} members remaining</div>
@@ -5194,99 +5250,165 @@ function renderGiveaway(state, history){
       <div class="gh-meta">${esc(e.month)}${e.auto?' · last standing':''}</div></div>
     <div class="gh-meta">Cycle ${e.cycle}${e.prize?` · 🎁 ${esc(e.prize)}`:''}</div>
   </div>`).join('');
-
   const hist = history.length ? `<details class="giveaway-history card" style="padding:14px;margin-bottom:14px">
-    <summary>History (${history.length})</summary>
-    ${rows}
+    <summary>History (${history.length})</summary>${rows}
   </details>` : '';
 
-  const admin = state.is_admin ? `<div class="giveaway-admin" id="gwAdmin">
-    <h3>Admin</h3>
-    <div class="ga-row">
-      <input type="text" id="gwPrizeInput" placeholder="Set prize…" value="${esc(state.prize||'')}">
-      <button class="btn-sm" onclick="gwSetPrize()">Save</button>
-    </div>
-    <div style="font-size:12px;color:var(--dim);margin-bottom:8px">Pool members</div>
-    <div class="giveaway-member-list" id="gwMemberList">${renderGwMembers(state.pool_members||[])}</div>
-    <div class="ga-row" style="margin-bottom:12px">
-      <select id="gwAddSelect" style="flex:1;background:rgba(255,255,255,.06);border:1px solid rgba(255,255,255,.12);border-radius:8px;padding:8px 12px;color:var(--txt);font-size:13px;outline:none;">${(state.available_members||[]).map(m=>`<option value="${esc(m.id)}" data-display="${esc(m.display)}">${esc(m.display)}</option>`).join('')}</select>
-      <button class="btn-sm" onclick="gwAddMember()">Add</button>
-    </div>
-    <div class="ga-row" style="gap:8px;flex-wrap:wrap">
-      <button class="btn-sm" onclick="gwRunDraw()" style="background:linear-gradient(135deg,rgba(255,47,214,.3),rgba(157,92,255,.3));border-color:rgba(255,47,214,.4)">🎲 Run Draw</button>
-      <button class="btn-sm" onclick="gwSeed()">Seed from portal</button>
-      <button class="ga-btn-danger" onclick="gwReset()">↺ Reset cycle</button>
-    </div>
-    <div id="gwMsg" style="font-size:12px;margin-top:8px;color:var(--dim)"></div>
-  </div>` : '';
+  let admin = '';
+  if(state.is_admin){
+    const testWinner = w ? `<div class="gw-test-winner">
+      <div class="gwtw-label">🔒 Admin preview — last drawn winner</div>
+      <div class="gwtw-name">${esc(w.winner)}</div>
+      <div style="font-size:11px;color:var(--dim);margin-top:2px">${esc(w.month)} · Cycle ${w.cycle}${w.auto?' · last standing':''}</div>
+    </div>` : '<div style="font-size:12px;color:var(--dim);margin-bottom:10px">No draw run yet.</div>';
+    const avail = (state.available_members||[]);
+    const selOpts = avail.length
+      ? avail.map(m=>`<option value="${esc(m.id)}" data-display="${esc(m.display)}">${esc(m.display)}</option>`).join('')
+      : '<option value="">— all members in pool —</option>';
+    admin = `<div class="giveaway-admin" id="gwAdmin">
+      <h3>Admin</h3>
+      ${testWinner}
+      <div class="ga-row">
+        <input type="text" id="gwPrizeInput" placeholder="Prize (e.g. PS5 game)" value="${esc(state.prize||'')}">
+        <button class="btn-sm" onclick="gwSetPrize()">Save prize</button>
+      </div>
+      <div class="ga-row">
+        <input type="date" id="gwDateInput" value="${esc(state.draw_date||'')}">
+        <button class="btn-sm" onclick="gwSetDate()">Set draw date</button>
+      </div>
+      <div style="font-size:11px;color:var(--dim);margin-bottom:6px">Pool members (${(state.pool_members||[]).length})</div>
+      <div class="giveaway-member-list" id="gwMemberList">${renderGwMembers(state.pool_members||[])}</div>
+      <div class="ga-row" style="margin-bottom:12px">
+        <select id="gwAddSelect" style="flex:1;background:rgba(255,255,255,.06);border:1px solid rgba(255,255,255,.12);border-radius:8px;padding:8px 12px;color:var(--txt);font-size:13px;outline:none;">${selOpts}</select>
+        <button class="btn-sm" onclick="gwAddMember()">Add</button>
+      </div>
+      <div class="ga-row" style="gap:8px;flex-wrap:wrap">
+        <button class="btn-sm" onclick="gwRunDraw()" style="background:linear-gradient(135deg,rgba(255,47,214,.3),rgba(157,92,255,.3));border-color:rgba(255,47,214,.5)">🎲 Run Draw</button>
+        <button class="btn-sm" onclick="gwSeed()">Seed from portal</button>
+        <button class="ga-btn-danger" onclick="gwReset()">↺ Reset cycle</button>
+      </div>
+      <div id="gwMsg" style="font-size:12px;margin-top:8px;color:var(--dim)"></div>
+    </div>`;
+  }
 
-  return winner + pool + hist + admin;
+  return mainCard + pool + hist + admin;
 }
 
 function renderGwMembers(members){
-  if(!members.length) return '<div style="font-size:12px;color:var(--dim);padding:4px 0">Pool is empty</div>';
+  if(!members.length) return '<div style="font-size:12px;color:var(--dim);padding:4px 0">Pool is empty — seed or add members</div>';
   return members.map(m=>`<div class="gm-row">
     <span>${esc(m.display)}</span>
     <button class="gm-remove" onclick="gwRemoveMember('${esc(m.id)}','${esc(m.display)}')" title="Remove">×</button>
   </div>`).join('');
 }
 
-function wireGiveawayAdmin(){}
+function startGwCountdown(drawDate){
+  if(_gwCountdownTimer) clearInterval(_gwCountdownTimer);
+  const target = new Date(drawDate+'T00:00:00').getTime();
+  function tick(){
+    const diff = target - Date.now();
+    if(diff <= 0){
+      ['gwD','gwH','gwM','gwS'].forEach((id,i)=>{ if($(id)) $(id).textContent=i?'00':'0'; });
+      clearInterval(_gwCountdownTimer); return;
+    }
+    const d=Math.floor(diff/86400000), h=Math.floor((diff%86400000)/3600000);
+    const m=Math.floor((diff%3600000)/60000), s=Math.floor((diff%60000)/1000);
+    if($('gwD')) $('gwD').textContent=d;
+    if($('gwH')) $('gwH').textContent=String(h).padStart(2,'0');
+    if($('gwM')) $('gwM').textContent=String(m).padStart(2,'0');
+    if($('gwS')) $('gwS').textContent=String(s).padStart(2,'0');
+  }
+  tick(); _gwCountdownTimer = setInterval(tick, 1000);
+}
+
+function startConfetti(){
+  if(_gwConfettiStop){ _gwConfettiStop(); _gwConfettiStop=null; }
+  const canvas = document.createElement('canvas');
+  canvas.style.cssText='position:fixed;top:0;left:0;width:100%;height:100%;pointer-events:none;z-index:9000';
+  document.body.appendChild(canvas);
+  const ctx=canvas.getContext('2d');
+  canvas.width=window.innerWidth; canvas.height=window.innerHeight;
+  const colors=['#ff2fd6','#9d5cff','#22e6ff','#ffd700','#ff6b6b','#51cf66','#ffffff'];
+  const particles=Array.from({length:180},()=>({
+    x:Math.random()*canvas.width, y:Math.random()*canvas.height-canvas.height,
+    r:5+Math.random()*7, spd:1.5+Math.random()*3,
+    color:colors[Math.floor(Math.random()*colors.length)],
+    tiltA:0, tiltSpd:.08+Math.random()*.1, shape:Math.random()>.5?'rect':'circle',
+  }));
+  let running=true, frame;
+  function draw(){
+    if(!running) return;
+    ctx.clearRect(0,0,canvas.width,canvas.height);
+    particles.forEach(p=>{
+      p.tiltA+=p.tiltSpd; p.y+=p.spd; p.x+=Math.sin(p.tiltA);
+      if(p.y>canvas.height+20){ p.y=-10; p.x=Math.random()*canvas.width; }
+      ctx.save(); ctx.translate(p.x,p.y); ctx.rotate(Math.sin(p.tiltA)*0.3);
+      ctx.fillStyle=p.color; ctx.globalAlpha=.8;
+      if(p.shape==='rect'){ ctx.fillRect(-p.r/2,-p.r*.3,p.r,p.r*.6); }
+      else{ ctx.beginPath(); ctx.arc(0,0,p.r*.5,0,Math.PI*2); ctx.fill(); }
+      ctx.restore();
+    });
+    frame=requestAnimationFrame(draw);
+  }
+  draw();
+  _gwConfettiStop=()=>{ running=false; cancelAnimationFrame(frame); canvas.remove(); };
+}
 
 async function gwMsg(msg, ok=true){
   const el=$('gwMsg'); if(!el)return;
   el.style.color=ok?'var(--neon)':'#ff8080'; el.textContent=msg;
-  setTimeout(()=>el.textContent='',3000);
+  setTimeout(()=>{ if(el) el.textContent=''; },3500);
 }
-
 async function gwSetPrize(){
-  const prize=$('gwPrizeInput').value.trim();
+  const prize=($('gwPrizeInput')||{}).value?.trim()||'';
   const r=await fetch('/api/giveaway/prize',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({prize})});
-  if(r.ok) gwMsg('Prize saved ✓'); else gwMsg('Error saving prize',false);
+  if(r.ok) gwMsg('Prize saved ✓'); else gwMsg('Error',false);
 }
-
-async function gwRunDraw(){
-  if(!confirm('Run this month\'s draw?')) return;
-  const r=await fetch('/api/giveaway/draw',{method:'POST'});
-  const d=await r.json();
-  if(!r.ok){ gwMsg(d.detail||'Error',false); return; }
-  gwMsg(d.status==='already_drawn'?`Already drawn: ${d.winner}`:`Winner: ${d.winner} 🎉`);
-  _gwLoaded=false; loadGiveaway();
-}
-
-async function gwSeed(){
-  if(!confirm('Seed pool from portal users?')) return;
-  const r=await fetch('/api/giveaway/seed',{method:'POST'});
-  const d=await r.json();
-  gwMsg(d.status==='already_seeded'?'Already seeded':`Seeded ${d.count} members`);
-  _gwLoaded=false; loadGiveaway();
-}
-
-async function gwReset(){
-  if(!confirm('Reset cycle? This starts a fresh pool with all members.')) return;
-  const r=await fetch('/api/giveaway/reset',{method:'POST'});
-  const d=await r.json();
-  if(r.ok){ gwMsg(`Cycle ${d.cycle} started — ${d.count} members`); _gwLoaded=false; loadGiveaway(); }
+async function gwSetDate(){
+  const d=($('gwDateInput')||{}).value||'';
+  if(!d){ gwMsg('Pick a date first',false); return; }
+  const r=await fetch('/api/giveaway/draw-date',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({draw_date:d})});
+  if(r.ok){ gwMsg('Draw date set ✓'); _gwLoaded=false; loadGiveaway(); }
   else gwMsg('Error',false);
 }
-
+async function gwRunDraw(){
+  if(!confirm("Run this month's draw now?")) return;
+  const r=await fetch('/api/giveaway/draw',{method:'POST'});
+  const d=await r.json();
+  if(d.status==='error'){ gwMsg(d.detail||'Error',false); return; }
+  if(!r.ok){ gwMsg(d.detail||'Error',false); return; }
+  gwMsg(d.status==='already_drawn'?'Already drawn this month':'Draw complete — see admin preview below');
+  _gwLoaded=false; loadGiveaway();
+}
+async function gwSeed(){
+  if(!confirm('Seed pool from all portal users?')) return;
+  const r=await fetch('/api/giveaway/seed',{method:'POST'});
+  const d=await r.json();
+  gwMsg(d.status==='already_seeded'?'Pool already seeded':`Seeded ${d.count} members ✓`);
+  _gwLoaded=false; loadGiveaway();
+}
+async function gwReset(){
+  if(!confirm('Reset cycle? Everyone rejoins the pool and cycle count increments.')) return;
+  const r=await fetch('/api/giveaway/reset',{method:'POST'});
+  const d=await r.json();
+  if(r.ok){ gwMsg(`Cycle ${d.cycle} started — ${d.count} members ✓`); _gwLoaded=false; loadGiveaway(); }
+  else gwMsg('Error',false);
+}
 async function gwAddMember(){
   const sel=$('gwAddSelect');
-  if(!sel||!sel.value){ gwMsg('Select a member first',false); return; }
-  const id=sel.value;
-  const display=sel.selectedOptions[0]?.dataset?.display||sel.selectedOptions[0]?.textContent||id;
+  if(!sel||!sel.value){ gwMsg('Nothing to add',false); return; }
+  const id=sel.value, display=sel.selectedOptions[0]?.dataset?.display||sel.selectedOptions[0]?.textContent||id;
   const r=await fetch('/api/giveaway/members',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({id,display})});
   const d=await r.json();
   if(r.ok){ gwMsg(d.status==='already_in_pool'?'Already in pool':'Added ✓'); _gwLoaded=false; loadGiveaway(); }
   else gwMsg('Error',false);
 }
-
 async function gwRemoveMember(id, name){
   if(!confirm(`Remove ${name} from pool?`)) return;
   const r=await fetch(`/api/giveaway/members/${encodeURIComponent(id)}`,{method:'DELETE'});
-  const d=await r.json();
   if(r.ok){ gwMsg('Removed ✓'); _gwLoaded=false; loadGiveaway(); }
   else gwMsg('Error',false);
 }
+
 </script>
 </body></html>"""

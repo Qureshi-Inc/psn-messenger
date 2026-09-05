@@ -12,7 +12,7 @@ _lock        = Lock()
 def _load_pool() -> dict:
     if POOL_FILE.exists():
         return json.loads(POOL_FILE.read_text())
-    return {"cycle": 1, "members": [], "prize": ""}
+    return {"cycle": 1, "members": [], "prize": "", "draw_date": ""}
 
 
 def _save_pool(pool: dict):
@@ -40,8 +40,8 @@ def _dedup(members: list[dict]) -> list[dict]:
             out.append(m)
     return out
 
+
 def seed(all_members: list[dict]) -> dict:
-    """Initialise the pool from platform members. Safe to re-call if already seeded."""
     with _lock:
         pool = _load_pool()
         if pool["members"]:
@@ -52,7 +52,6 @@ def seed(all_members: list[dict]) -> dict:
 
 
 def reset(all_members: list[dict]) -> dict:
-    """Force-reset pool to all members, incrementing the cycle."""
     with _lock:
         pool = _load_pool()
         pool["cycle"] += 1
@@ -63,7 +62,9 @@ def reset(all_members: list[dict]) -> dict:
 
 def run_draw(all_members: list[dict]) -> dict:
     """
-    Run this month's draw. Idempotent — if month already drawn, returns existing entry.
+    Run this month's draw. Idempotent — same month returns existing entry.
+    Requires pool to be seeded; will NOT auto-populate from portal.
+    Auto-resets only at end of a completed cycle.
     """
     month = date.today().strftime("%Y-%m")
     with _lock:
@@ -75,8 +76,12 @@ def run_draw(all_members: list[dict]) -> dict:
         pool = _load_pool()
 
         if not pool["members"]:
+            cycle_winners = [e for e in history if e.get("cycle") == pool["cycle"]]
+            if not cycle_winners:
+                return {"status": "error", "detail": "Pool is empty — seed the pool first"}
+            # End of completed cycle — reset automatically
             pool["cycle"] += 1
-            pool["members"] = [{"id": m["id"], "display": m["display"]} for m in all_members]
+            pool["members"] = _dedup([{"id": m["id"], "display": m["display"]} for m in all_members])
             _save_pool(pool)
 
         auto = len(pool["members"]) == 1
@@ -105,8 +110,15 @@ def set_prize(prize: str) -> dict:
         return {"prize": prize}
 
 
+def set_draw_date(draw_date: str) -> dict:
+    with _lock:
+        pool = _load_pool()
+        pool["draw_date"] = draw_date
+        _save_pool(pool)
+        return {"draw_date": draw_date}
+
+
 def add_member(member: dict) -> dict:
-    """Add a member to the current pool. member must have {id, display}."""
     with _lock:
         pool = _load_pool()
         if any(m["id"] == member["id"] for m in pool["members"]):
@@ -117,7 +129,6 @@ def add_member(member: dict) -> dict:
 
 
 def remove_member(member_id: str) -> dict:
-    """Remove a member from the current pool by id."""
     with _lock:
         pool = _load_pool()
         before = len(pool["members"])
@@ -141,5 +152,6 @@ def get_state() -> dict:
             "total_in_cycle": total_in_cycle,
             "latest_winner": latest,
             "prize": pool.get("prize", ""),
+            "draw_date": pool.get("draw_date", ""),
             "seeded": len(pool["members"]) > 0 or bool(history),
         }
