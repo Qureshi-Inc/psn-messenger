@@ -137,6 +137,33 @@ def remove_member(member_id: str) -> dict:
         return {"status": "removed" if removed else "not_found", "count": len(pool["members"])}
 
 
+def wipe() -> dict:
+    """Clear all history and pool. Complete fresh start."""
+    with _lock:
+        POOL_FILE.write_text(json.dumps({"cycle": 1, "members": [], "prize": "", "draw_date": ""}, indent=2))
+        HISTORY_FILE.write_text(json.dumps([], indent=2))
+        return {"status": "wiped"}
+
+
+def force_redraw(all_members: list[dict]) -> dict:
+    """Remove current month's draw entry for current cycle and re-draw. Admin testing only."""
+    month = date.today().strftime("%Y-%m")
+    with _lock:
+        pool = _load_pool()
+        history = _load_history()
+        # Remove this month's entry for current cycle if it exists
+        removed = [e for e in history if e.get("month") == month and e.get("cycle") == pool["cycle"]]
+        if removed:
+            # Put the previous winner back in the pool
+            prev = removed[0]
+            pool["members"].append({"id": prev["winner_id"], "display": prev["winner"]})
+            history = [e for e in history if not (e.get("month") == month and e.get("cycle") == pool["cycle"])]
+            HISTORY_FILE.write_text(json.dumps(history, indent=2))
+            _save_pool(pool)
+    # Now run a fresh draw
+    return run_draw(all_members)
+
+
 def get_state() -> dict:
     with _lock:
         pool = _load_pool()

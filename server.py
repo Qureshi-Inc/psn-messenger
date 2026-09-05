@@ -1673,6 +1673,23 @@ async def giveaway_remove_member(request: Request, member_id: str):
     result = await asyncio.to_thread(_giveaway.remove_member, member_id)
     return JSONResponse(result)
 
+@app.post("/api/giveaway/wipe")
+async def giveaway_wipe(request: Request):
+    session = _get_session(request)
+    if not session or not await _is_iam_admin(session.get("sub", "")):
+        raise HTTPException(status_code=403, detail="giveaway admin only")
+    result = await asyncio.to_thread(_giveaway.wipe)
+    return JSONResponse(result)
+
+@app.post("/api/giveaway/force-redraw")
+async def giveaway_force_redraw(request: Request):
+    session = _get_session(request)
+    if not session or not await _is_iam_admin(session.get("sub", "")):
+        raise HTTPException(status_code=403, detail="giveaway admin only")
+    members = await asyncio.to_thread(_portal_members)
+    result = await asyncio.to_thread(_giveaway.force_redraw, members)
+    return JSONResponse(result)
+
 @app.get("/auth/settings/psn")
 async def settings_psn_status(request: Request):
     """PSN status for the logged-in user. Admins see all accounts."""
@@ -5284,8 +5301,10 @@ function renderGiveaway(state, history){
       </div>
       <div class="ga-row" style="gap:8px;flex-wrap:wrap">
         <button class="btn-sm" onclick="gwRunDraw()" style="background:linear-gradient(135deg,rgba(255,47,214,.3),rgba(157,92,255,.3));border-color:rgba(255,47,214,.5)">🎲 Run Draw</button>
+        <button class="btn-sm" onclick="gwForceRedraw()" style="border-color:rgba(255,165,0,.4);color:#ffa500">🔄 Force Redraw</button>
         <button class="btn-sm" onclick="gwSeed()">Seed from portal</button>
         <button class="ga-btn-danger" onclick="gwReset()">↺ Reset cycle</button>
+        <button class="ga-btn-danger" onclick="gwWipe()" style="border-color:rgba(255,50,50,.6)">🗑 Wipe all</button>
       </div>
       <div id="gwMsg" style="font-size:12px;margin-top:8px;color:var(--dim)"></div>
     </div>`;
@@ -5392,6 +5411,21 @@ async function gwReset(){
   const r=await fetch('/api/giveaway/reset',{method:'POST'});
   const d=await r.json();
   if(r.ok){ gwMsg(`Cycle ${d.cycle} started — ${d.count} members ✓`); _gwLoaded=false; loadGiveaway(); }
+  else gwMsg('Error',false);
+}
+async function gwForceRedraw(){
+  if(!confirm('Force redraw? This removes this month\'s result and picks a new winner.')) return;
+  const r=await fetch('/api/giveaway/force-redraw',{method:'POST'});
+  const d=await r.json();
+  if(d.status==='error'){ gwMsg(d.detail||'Error',false); return; }
+  gwMsg(r.ok?`Redrawn → ${d.winner}`:'Error',r.ok);
+  _gwLoaded=false; loadGiveaway();
+}
+async function gwWipe(){
+  if(!confirm('WIPE ALL giveaway data? This clears history and pool completely.')) return;
+  if(!confirm('Are you sure? This cannot be undone.')) return;
+  const r=await fetch('/api/giveaway/wipe',{method:'POST'});
+  if(r.ok){ gwMsg('Wiped — fresh start ✓'); _gwLoaded=false; loadGiveaway(); }
   else gwMsg('Error',false);
 }
 async function gwAddMember(){
