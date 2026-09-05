@@ -1572,12 +1572,6 @@ async def wa_ingest(request: Request):
     return JSONResponse({"inserted": inserted, "received": len(msgs)})
 
 
-GIVEAWAY_ADMIN_EMAIL = "soup@crcmz.me"
-
-def _is_giveaway_admin(request: Request) -> bool:
-    session = _get_session(request)
-    return bool(session and session.get("email", "").lower() == GIVEAWAY_ADMIN_EMAIL.lower())
-
 def _portal_members() -> list[dict]:
     """Convert portal users to giveaway member dicts."""
     users = portal_mod.list_users()
@@ -1591,10 +1585,12 @@ def _portal_members() -> list[dict]:
 
 @app.get("/api/giveaway")
 async def giveaway_state(request: Request):
-    if not _get_session(request):
+    session = _get_session(request)
+    if not session:
         return JSONResponse({"error": "not authenticated"}, status_code=401)
+    user_id = session.get("sub", "")
     state = await asyncio.to_thread(_giveaway.get_state)
-    state["is_admin"] = _is_giveaway_admin(request)
+    state["is_admin"] = await _is_iam_admin(user_id)
     return JSONResponse(state)
 
 @app.get("/api/giveaway/history")
@@ -1606,7 +1602,8 @@ async def giveaway_history(request: Request):
 
 @app.post("/api/giveaway/draw")
 async def giveaway_draw(request: Request):
-    if not _is_giveaway_admin(request):
+    session = _get_session(request)
+    if not session or not await _is_iam_admin(session.get("sub", "")):
         raise HTTPException(status_code=403, detail="giveaway admin only")
     members = await asyncio.to_thread(_portal_members)
     result = await asyncio.to_thread(_giveaway.run_draw, members)
@@ -1614,7 +1611,8 @@ async def giveaway_draw(request: Request):
 
 @app.post("/api/giveaway/reset")
 async def giveaway_reset(request: Request):
-    if not _is_giveaway_admin(request):
+    session = _get_session(request)
+    if not session or not await _is_iam_admin(session.get("sub", "")):
         raise HTTPException(status_code=403, detail="giveaway admin only")
     members = await asyncio.to_thread(_portal_members)
     result = await asyncio.to_thread(_giveaway.reset, members)
@@ -1622,7 +1620,8 @@ async def giveaway_reset(request: Request):
 
 @app.post("/api/giveaway/seed")
 async def giveaway_seed(request: Request):
-    if not _is_giveaway_admin(request):
+    session = _get_session(request)
+    if not session or not await _is_iam_admin(session.get("sub", "")):
         raise HTTPException(status_code=403, detail="giveaway admin only")
     members = await asyncio.to_thread(_portal_members)
     result = await asyncio.to_thread(_giveaway.seed, members)
@@ -1630,7 +1629,8 @@ async def giveaway_seed(request: Request):
 
 @app.post("/api/giveaway/prize")
 async def giveaway_set_prize(request: Request):
-    if not _is_giveaway_admin(request):
+    session = _get_session(request)
+    if not session or not await _is_iam_admin(session.get("sub", "")):
         raise HTTPException(status_code=403, detail="giveaway admin only")
     body = await request.json()
     result = await asyncio.to_thread(_giveaway.set_prize, body.get("prize", ""))
@@ -1638,7 +1638,8 @@ async def giveaway_set_prize(request: Request):
 
 @app.post("/api/giveaway/members")
 async def giveaway_add_member(request: Request):
-    if not _is_giveaway_admin(request):
+    session = _get_session(request)
+    if not session or not await _is_iam_admin(session.get("sub", "")):
         raise HTTPException(status_code=403, detail="giveaway admin only")
     body = await request.json()
     result = await asyncio.to_thread(_giveaway.add_member, {"id": body["id"], "display": body["display"]})
@@ -1646,7 +1647,8 @@ async def giveaway_add_member(request: Request):
 
 @app.delete("/api/giveaway/members/{member_id}")
 async def giveaway_remove_member(request: Request, member_id: str):
-    if not _is_giveaway_admin(request):
+    session = _get_session(request)
+    if not session or not await _is_iam_admin(session.get("sub", "")):
         raise HTTPException(status_code=403, detail="giveaway admin only")
     result = await asyncio.to_thread(_giveaway.remove_member, member_id)
     return JSONResponse(result)
