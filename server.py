@@ -1696,6 +1696,26 @@ async def giveaway_reveal(request: Request, gid: int):
     return JSONResponse(result)
 
 
+@app.post("/api/giveaway/{gid}/draw-and-reveal")
+async def giveaway_draw_and_reveal(request: Request, gid: int):
+    session = _get_session(request)
+    if not session or not await _is_iam_admin(session.get("sub", "")):
+        raise HTTPException(status_code=403, detail="admin only")
+    # Draw if not already drawn
+    g = await asyncio.to_thread(_giveaway.get_giveaway, gid)
+    if not g:
+        raise HTTPException(status_code=404, detail="not found")
+    if g["status"] in ("open", "locked"):
+        r = await asyncio.to_thread(_giveaway.draw_winner, gid)
+        if r and "error" in r:
+            raise HTTPException(status_code=400, detail=r["error"])
+    # Reveal
+    r2 = await asyncio.to_thread(_giveaway.reveal_winner, gid)
+    if r2 and "error" in r2:
+        raise HTTPException(status_code=400, detail=r2["error"])
+    return JSONResponse({"status": "revealed"})
+
+
 @app.post("/api/giveaway/{gid}/close")
 async def giveaway_close(request: Request, gid: int):
     session = _get_session(request)
@@ -3710,10 +3730,9 @@ _DASHBOARD_TMPL = r"""<!doctype html>
       </div>
     </div>
   </div>
-</div>
-
-<div class="panel" id="p-giveaway">
-  <div id="giveaway-inner"><div class="spin">Loading giveaway…</div></div>
+  <div class="panel" id="p-giveaway">
+    <div id="giveaway-inner"><div class="spin">Loading giveaway…</div></div>
+  </div>
 </div>
 
 <div class="board-wrap" id="boardWrap">
@@ -4007,8 +4026,9 @@ function tab(btn, skipHash){
     const btn = document.querySelector('.nav-item[data-p="'+hash+'"]');
     if(btn){
       tab(btn, true);
-      if(hash==='slap') loadSlap();
-      if(hash==='wa')   loadWa();
+      if(hash==='slap')    loadSlap();
+      if(hash==='wa')      loadWa();
+      if(hash==='giveaway') loadGiveaway();
     }
   }
 })();
@@ -5284,6 +5304,12 @@ async function loadGiveaway(){
       fetch('/api/giveaway').then(r=>r.json()),
       fetch('/api/giveaway/history').then(r=>r.json()),
     ]);
+    // If reveal date already passed and not yet revealed, auto-trigger immediately
+    const g=d.giveaway;
+    if(g&&d.is_admin&&['open','locked','drawn'].includes(g.status)&&g.reveal_at&&new Date(g.reveal_at)<=new Date()){
+      await fetch('/api/giveaway/'+g.id+'/draw-and-reveal',{method:'POST'});
+      _gwLoaded=false; loadGiveaway(); return;
+    }
     el.innerHTML=gwRender(d,hist);
     gwWireTimers(d);
     if(d.giveaway?.status==='revealed'){
@@ -5334,7 +5360,19 @@ function gwWireTimers(d){
   else if(['open','locked','draft'].includes(g.status)&&g.reveal_at){ target=new Date(g.reveal_at).getTime(); prefix='gwDraw'; }
   if(!target||!prefix) return;
   function tick(){
-    const diff=target-Date.now(); if(diff<0){ clearInterval(_gwTimer); return; }
+    const diff=target-Date.now();
+    if(diff<=0){
+      clearInterval(_gwTimer);
+      ['D','H','M','S'].forEach(u=>{ const el=$(prefix+u); if(el) el.textContent='0'; });
+      // Auto-reveal when timer expires: admin triggers draw+reveal, others just reload
+      if(d.is_admin&&g.status!=='revealed'&&g.status!=='closed'){
+        fetch('/api/giveaway/'+g.id+'/draw-and-reveal',{method:'POST'})
+          .then(()=>setTimeout(_gwReload,600));
+      } else {
+        setTimeout(_gwReload,800);
+      }
+      return;
+    }
     const dd=Math.floor(diff/86400000),h=Math.floor((diff%86400000)/3600000);
     const m=Math.floor((diff%3600000)/60000),s=Math.floor((diff%60000)/1000);
     if($(prefix+'D')) $(prefix+'D').textContent=dd;
@@ -5379,8 +5417,8 @@ function gwAdminPanel(g, d){
   // State actions
   const actions=[];
   if(status==='draft') actions.push('<button class="gw-btn-primary" onclick="gwPublish('+g.id+')">Publish Giveaway</button>');
-  if(status==='open'||status==='locked') actions.push('<button class="gw-btn-primary" onclick="gwDraw('+g.id+')">🎲 Draw Winner</button>');
-  if(status==='drawn') actions.push('<button class="gw-btn-primary" onclick="gwReveal('+g.id+')">🎉 Reveal Winner</button>');
+  if(status==='open'||status==='locked') actions.push('<button class="gw-btn-primary" onclick="gwDrawAndReveal('+g.id+')">🎲 Draw &amp; Reveal Winner</button>');
+  if(status==='drawn') actions.push('<button class="gw-btn-primary" onclick="gwDrawAndReveal('+g.id+')">🎉 Reveal Winner Now</button>');
   if(status==='revealed') actions.push('<button class="gw-btn-secondary" onclick="gwClose('+g.id+')">Close Giveaway</button>','<button class="gw-btn-danger" onclick="gwRedraw('+g.id+')">Disqualify &amp; Redraw</button>');
   return '<div class="gw-admin" id="gwAdmin"><h3>Admin</h3>'+badge+inner+'<div class="gw-admin-actions">'+actions.join('')+'</div><div id="gwMsg" style="font-size:12px;margin-top:8px;color:var(--dim)"></div></div>';
 }
@@ -5446,8 +5484,9 @@ async function gwUpdate(id){
 }
 async function gwPublish(id){ const r=await fetch('/api/giveaway/'+id+'/publish',{method:'POST'}); const d=await r.json(); if(r.ok){ gwMsg('Published — '+d.entries+' members eligible ✓'); _gwReload(); } else gwMsg(d.detail||d.error||'Error',false); }
 async function gwLock(id){ const r=await fetch('/api/giveaway/'+id+'/lock',{method:'POST'}); if(r.ok){ gwMsg('Entries locked ✓'); _gwReload(); } else{ const d=await r.json(); gwMsg(d.detail||'Error',false); } }
-async function gwDraw(id){ const r=await fetch('/api/giveaway/'+id+'/draw',{method:'POST'}); const d=await r.json(); if(r.ok){ gwMsg('Winner drawn — see admin preview ✓'); _gwReload(); } else gwMsg(d.detail||d.error||'Error',false); }
+async function gwDraw(id){ const r=await fetch('/api/giveaway/'+id+'/draw',{method:'POST'}); const d=await r.json(); if(r.ok){ gwMsg('Winner drawn ✓'); _gwReload(); } else gwMsg(d.detail||d.error||'Error',false); }
 async function gwReveal(id){ const r=await fetch('/api/giveaway/'+id+'/reveal',{method:'POST'}); if(r.ok){ gwMsg('Winner revealed! 🎉'); _gwReload(); } else{ const d=await r.json(); gwMsg(d.detail||'Error',false); } }
+async function gwDrawAndReveal(id){ const r=await fetch('/api/giveaway/'+id+'/draw-and-reveal',{method:'POST'}); if(r.ok){ gwMsg('Winner revealed! 🎉'); _gwReload(); } else{ const d=await r.json(); gwMsg(d.detail||d.error||'Error',false); } }
 async function gwClose(id){ if(!confirm('Close this giveaway?')) return; const r=await fetch('/api/giveaway/'+id+'/close',{method:'POST'}); if(r.ok){ gwMsg('Closed ✓'); _gwReload(); } else{ const d=await r.json(); gwMsg(d.detail||'Error',false); } }
 async function gwRedraw(id){
   const reason=prompt('Reason for redraw?\n\n- Winner declined\n- Winner ineligible\n- Testing\n- Other');
