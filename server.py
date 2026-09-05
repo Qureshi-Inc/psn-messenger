@@ -1572,6 +1572,85 @@ async def wa_ingest(request: Request):
     return JSONResponse({"inserted": inserted, "received": len(msgs)})
 
 
+GIVEAWAY_ADMIN_EMAIL = "soup@crcmz.me"
+
+def _is_giveaway_admin(request: Request) -> bool:
+    session = _get_session(request)
+    return bool(session and session.get("email", "").lower() == GIVEAWAY_ADMIN_EMAIL.lower())
+
+def _portal_members() -> list[dict]:
+    """Convert portal users to giveaway member dicts."""
+    users = portal_mod.list_users()
+    out = []
+    for u in users:
+        if not u.get("zitadel_user_id"):
+            continue
+        display = u.get("online_id") or u.get("mm_username") or u["zitadel_user_id"]
+        out.append({"id": u["zitadel_user_id"], "display": display})
+    return out
+
+@app.get("/api/giveaway")
+async def giveaway_state(request: Request):
+    if not _get_session(request):
+        return JSONResponse({"error": "not authenticated"}, status_code=401)
+    state = await asyncio.to_thread(_giveaway.get_state)
+    state["is_admin"] = _is_giveaway_admin(request)
+    return JSONResponse(state)
+
+@app.get("/api/giveaway/history")
+async def giveaway_history(request: Request):
+    if not _get_session(request):
+        return JSONResponse({"error": "not authenticated"}, status_code=401)
+    history = await asyncio.to_thread(_giveaway._load_history)
+    return JSONResponse(list(reversed(history)))
+
+@app.post("/api/giveaway/draw")
+async def giveaway_draw(request: Request):
+    if not _is_giveaway_admin(request):
+        raise HTTPException(status_code=403, detail="giveaway admin only")
+    members = await asyncio.to_thread(_portal_members)
+    result = await asyncio.to_thread(_giveaway.run_draw, members)
+    return JSONResponse(result)
+
+@app.post("/api/giveaway/reset")
+async def giveaway_reset(request: Request):
+    if not _is_giveaway_admin(request):
+        raise HTTPException(status_code=403, detail="giveaway admin only")
+    members = await asyncio.to_thread(_portal_members)
+    result = await asyncio.to_thread(_giveaway.reset, members)
+    return JSONResponse(result)
+
+@app.post("/api/giveaway/seed")
+async def giveaway_seed(request: Request):
+    if not _is_giveaway_admin(request):
+        raise HTTPException(status_code=403, detail="giveaway admin only")
+    members = await asyncio.to_thread(_portal_members)
+    result = await asyncio.to_thread(_giveaway.seed, members)
+    return JSONResponse(result)
+
+@app.post("/api/giveaway/prize")
+async def giveaway_set_prize(request: Request):
+    if not _is_giveaway_admin(request):
+        raise HTTPException(status_code=403, detail="giveaway admin only")
+    body = await request.json()
+    result = await asyncio.to_thread(_giveaway.set_prize, body.get("prize", ""))
+    return JSONResponse(result)
+
+@app.post("/api/giveaway/members")
+async def giveaway_add_member(request: Request):
+    if not _is_giveaway_admin(request):
+        raise HTTPException(status_code=403, detail="giveaway admin only")
+    body = await request.json()
+    result = await asyncio.to_thread(_giveaway.add_member, {"id": body["id"], "display": body["display"]})
+    return JSONResponse(result)
+
+@app.delete("/api/giveaway/members/{member_id}")
+async def giveaway_remove_member(request: Request, member_id: str):
+    if not _is_giveaway_admin(request):
+        raise HTTPException(status_code=403, detail="giveaway admin only")
+    result = await asyncio.to_thread(_giveaway.remove_member, member_id)
+    return JSONResponse(result)
+
 @app.get("/auth/settings/psn")
 async def settings_psn_status(request: Request):
     """PSN status for the logged-in user. Admins see all accounts."""
@@ -1772,6 +1851,7 @@ from psn_messaging import ClipNotReady, ClipUnauthorized, ClipRateLimited, ClipE
 _clips.init()
 
 import whatsapp_analytics as _wa
+import giveaway as _giveaway
 _wa.init()
 
 _video_seen: set[str] = set()
@@ -2929,7 +3009,7 @@ _DASHBOARD_TMPL = r"""<!doctype html>
       transform .45s cubic-bezier(0.34,1.56,0.64,1) calc(var(--ni,0) * 55ms); }
   .nav-item:nth-child(1){--ni:0} .nav-item:nth-child(2){--ni:1}
   .nav-item:nth-child(3){--ni:2} .nav-item:nth-child(4){--ni:3}
-  .nav-item:nth-child(5){--ni:4}
+  .nav-item:nth-child(5){--ni:4} .nav-item:nth-child(6){--ni:5}
 
   /* panel animation */
   .panel { display:none; }
@@ -3174,6 +3254,53 @@ _DASHBOARD_TMPL = r"""<!doctype html>
   .wa-word-grid { display:grid; grid-template-columns:1fr 1fr; gap:8px; margin-bottom:8px; }
   @media(max-width:600px){ .wa-word-grid { grid-template-columns:1fr; } }
 
+  /* ── Giveaway ── */
+  .giveaway-winner { background:linear-gradient(135deg,rgba(255,47,214,.1),rgba(157,92,255,.1));
+    border:1px solid rgba(255,47,214,.25); border-radius:16px; padding:20px;
+    text-align:center; margin-bottom:14px; }
+  .giveaway-winner .gw-label { font-size:11px; text-transform:uppercase; letter-spacing:.08em;
+    color:var(--dim); margin-bottom:6px; }
+  .giveaway-winner .gw-name { font-size:28px; font-weight:800;
+    background:linear-gradient(135deg,var(--neon),var(--violet)); -webkit-background-clip:text;
+    -webkit-text-fill-color:transparent; background-clip:text; margin-bottom:4px; }
+  .giveaway-winner .gw-prize { font-size:13px; color:var(--dim); }
+  .giveaway-winner .gw-auto { font-size:12px; color:#ffd700; margin-top:4px; }
+  .giveaway-pool { background:rgba(255,255,255,.03); border:1px solid rgba(255,255,255,.07);
+    border-radius:14px; padding:16px; margin-bottom:14px; }
+  .giveaway-pool .gp-label { font-size:12px; color:var(--dim); margin-bottom:8px; }
+  .giveaway-pool .gp-bar { height:6px; background:rgba(255,255,255,.08); border-radius:3px; overflow:hidden; margin-bottom:8px; }
+  .giveaway-pool .gp-fill { height:100%; border-radius:3px;
+    background:linear-gradient(90deg,var(--neon),var(--violet)); transition:width .5s ease; }
+  .giveaway-pool .gp-count { font-size:13px; color:var(--txt); }
+  .giveaway-history summary { cursor:pointer; font-size:13px; font-weight:600;
+    color:var(--dim); padding:4px 0; list-style:none; display:flex; align-items:center; gap:6px; }
+  .giveaway-history summary::before { content:'▸'; transition:transform .2s; }
+  .giveaway-history[open] summary::before { transform:rotate(90deg); }
+  .giveaway-history .gh-row { display:flex; justify-content:space-between; align-items:center;
+    padding:9px 0; border-bottom:1px solid rgba(255,255,255,.05); font-size:13px; }
+  .giveaway-history .gh-row:last-child { border-bottom:none; }
+  .giveaway-history .gh-name { font-weight:600; color:var(--txt); }
+  .giveaway-history .gh-meta { font-size:11px; color:var(--dim); }
+  .giveaway-admin { background:rgba(255,255,255,.03); border:1px solid rgba(255,47,214,.2);
+    border-radius:14px; padding:16px; margin-top:14px; }
+  .giveaway-admin h3 { font-size:13px; font-weight:700; color:var(--neon);
+    text-transform:uppercase; letter-spacing:.06em; margin:0 0 12px; }
+  .giveaway-admin .ga-row { display:flex; gap:8px; margin-bottom:10px; }
+  .giveaway-admin input[type=text] { flex:1; background:rgba(255,255,255,.06);
+    border:1px solid rgba(255,255,255,.12); border-radius:8px; padding:8px 12px;
+    color:var(--txt); font-size:13px; outline:none; }
+  .giveaway-admin input[type=text]:focus { border-color:rgba(255,47,214,.5); }
+  .giveaway-member-list { display:flex; flex-direction:column; gap:4px; margin:8px 0 12px; }
+  .giveaway-member-list .gm-row { display:flex; justify-content:space-between; align-items:center;
+    padding:7px 10px; background:rgba(255,255,255,.04); border-radius:8px; font-size:13px; }
+  .giveaway-member-list .gm-remove { background:none; border:none; color:rgba(255,80,80,.7);
+    cursor:pointer; font-size:15px; padding:0 4px; line-height:1; }
+  .giveaway-member-list .gm-remove:hover { color:#ff5050; }
+  .ga-btn-danger { padding:8px 14px; border-radius:8px; border:1px solid rgba(255,80,80,.4);
+    background:rgba(255,80,80,.1); color:#ff8080; cursor:pointer; font-size:12px;
+    font-weight:600; transition:all .2s; }
+  .ga-btn-danger:hover { background:rgba(255,80,80,.2); color:#fff; }
+
   .user-btn { width:38px; height:38px; border-radius:50%;
     border:1.5px solid rgba(255,47,214,.7);
     background:linear-gradient(135deg,rgba(255,47,214,.25),rgba(157,92,255,.25));
@@ -3394,6 +3521,7 @@ _DASHBOARD_TMPL = r"""<!doctype html>
       <button class="nav-item" data-p="pipeline" data-icon="🎬" data-label="Clips" onclick="tab(this)"><span class="nav-i-icon">🎬</span><span>Clips</span></button>
       <button class="nav-item" data-p="slap" data-icon="🎵" data-label="Slap" onclick="tab(this);loadSlap()"><span class="nav-i-icon">🎵</span><span>Slap</span></button>
       <button class="nav-item" data-p="wa" data-icon="💬" data-label="WhatsApp" onclick="tab(this);loadWa()"><span class="nav-i-icon">💬</span><span>WhatsApp</span></button>
+      <button class="nav-item" data-p="giveaway" data-icon="🎁" data-label="Giveaway" onclick="tab(this);loadGiveaway()"><span class="nav-i-icon">🎁</span><span>Giveaway</span></button>
     </div>
   </div>
   <div class="panel on" id="p-squad">
@@ -3451,6 +3579,10 @@ _DASHBOARD_TMPL = r"""<!doctype html>
       </div>
     </div>
   </div>
+</div>
+
+<div class="panel" id="p-giveaway">
+  <div id="giveaway-inner"><div class="spin">Loading giveaway…</div></div>
 </div>
 
 <div class="board-wrap" id="boardWrap">
@@ -5008,6 +5140,145 @@ async function waDoImport(){
     if(btn){ btn.disabled=false; btn.textContent='📂 Choose Export File'; }
     fi.value='';
   }
+}
+
+// ── Giveaway ─────────────────────────────────────────────────────────────────
+let _gwLoaded = false;
+async function loadGiveaway(){
+  if(_gwLoaded) return;
+  _gwLoaded = true;
+  const el = $('giveaway-inner');
+  try {
+    const [state, history] = await Promise.all([
+      fetch('/api/giveaway').then(r=>r.json()),
+      fetch('/api/giveaway/history').then(r=>r.json()),
+    ]);
+    el.innerHTML = renderGiveaway(state, history);
+    if(state.is_admin) wireGiveawayAdmin(state);
+  } catch(e) {
+    el.innerHTML = '<div class="spin" style="color:var(--dim)">Failed to load giveaway</div>';
+  }
+}
+
+function renderGiveaway(state, history){
+  const w = state.latest_winner;
+  const pct = state.total_in_cycle > 0
+    ? Math.round(((state.total_in_cycle - state.pool_remaining) / state.total_in_cycle) * 100)
+    : 0;
+  const prize = state.prize ? `<div class="gw-prize">🎁 Prize: <b>${esc(state.prize)}</b></div>` : '';
+  const autoMsg = w && w.auto ? `<div class="gw-auto">🏆 Last one standing</div>` : '';
+  const winner = w
+    ? `<div class="giveaway-winner">
+        <div class="gw-label">${esc(w.month)} winner · Cycle ${w.cycle}</div>
+        <div class="gw-name">${esc(w.winner)}</div>
+        ${prize}${autoMsg}
+      </div>`
+    : `<div class="giveaway-winner"><div class="gw-label">No draw yet this cycle</div>
+        <div class="gw-name" style="font-size:16px;color:var(--dim)">Draw not run</div></div>`;
+
+  const pool = `<div class="giveaway-pool">
+    <div class="gp-label">Cycle ${state.cycle} — ${state.pool_remaining} of ${state.total_in_cycle} members remaining</div>
+    <div class="gp-bar"><div class="gp-fill" style="width:${pct}%"></div></div>
+    <div class="gp-count">${state.pool_remaining} left in pool</div>
+  </div>`;
+
+  const rows = history.map(e=>`<div class="gh-row">
+    <div><div class="gh-name">${esc(e.winner)}</div>
+      <div class="gh-meta">${esc(e.month)}${e.auto?' · last standing':''}</div></div>
+    <div class="gh-meta">Cycle ${e.cycle}${e.prize?` · 🎁 ${esc(e.prize)}`:''}</div>
+  </div>`).join('');
+
+  const hist = history.length ? `<details class="giveaway-history card" style="padding:14px;margin-bottom:14px">
+    <summary>History (${history.length})</summary>
+    ${rows}
+  </details>` : '';
+
+  const admin = state.is_admin ? `<div class="giveaway-admin" id="gwAdmin">
+    <h3>Admin</h3>
+    <div class="ga-row">
+      <input type="text" id="gwPrizeInput" placeholder="Set prize…" value="${esc(state.prize||'')}">
+      <button class="btn-sm" onclick="gwSetPrize()">Save</button>
+    </div>
+    <div style="font-size:12px;color:var(--dim);margin-bottom:8px">Pool members</div>
+    <div class="giveaway-member-list" id="gwMemberList">${renderGwMembers(state.pool_members||[])}</div>
+    <div class="ga-row" style="margin-bottom:12px">
+      <input type="text" id="gwAddId" placeholder="Zitadel user ID">
+      <input type="text" id="gwAddName" placeholder="Display name">
+      <button class="btn-sm" onclick="gwAddMember()">Add</button>
+    </div>
+    <div class="ga-row" style="gap:8px;flex-wrap:wrap">
+      <button class="btn-sm" onclick="gwRunDraw()" style="background:linear-gradient(135deg,rgba(255,47,214,.3),rgba(157,92,255,.3));border-color:rgba(255,47,214,.4)">🎲 Run Draw</button>
+      <button class="btn-sm" onclick="gwSeed()">Seed from portal</button>
+      <button class="ga-btn-danger" onclick="gwReset()">↺ Reset cycle</button>
+    </div>
+    <div id="gwMsg" style="font-size:12px;margin-top:8px;color:var(--dim)"></div>
+  </div>` : '';
+
+  return winner + pool + hist + admin;
+}
+
+function renderGwMembers(members){
+  if(!members.length) return '<div style="font-size:12px;color:var(--dim);padding:4px 0">Pool is empty</div>';
+  return members.map(m=>`<div class="gm-row">
+    <span>${esc(m.display)}</span>
+    <button class="gm-remove" onclick="gwRemoveMember('${esc(m.id)}','${esc(m.display)}')" title="Remove">×</button>
+  </div>`).join('');
+}
+
+function wireGiveawayAdmin(){}
+
+async function gwMsg(msg, ok=true){
+  const el=$('gwMsg'); if(!el)return;
+  el.style.color=ok?'var(--neon)':'#ff8080'; el.textContent=msg;
+  setTimeout(()=>el.textContent='',3000);
+}
+
+async function gwSetPrize(){
+  const prize=$('gwPrizeInput').value.trim();
+  const r=await fetch('/api/giveaway/prize',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({prize})});
+  if(r.ok) gwMsg('Prize saved ✓'); else gwMsg('Error saving prize',false);
+}
+
+async function gwRunDraw(){
+  if(!confirm('Run this month\'s draw?')) return;
+  const r=await fetch('/api/giveaway/draw',{method:'POST'});
+  const d=await r.json();
+  if(!r.ok){ gwMsg(d.detail||'Error',false); return; }
+  gwMsg(d.status==='already_drawn'?`Already drawn: ${d.winner}`:`Winner: ${d.winner} 🎉`);
+  _gwLoaded=false; loadGiveaway();
+}
+
+async function gwSeed(){
+  if(!confirm('Seed pool from portal users?')) return;
+  const r=await fetch('/api/giveaway/seed',{method:'POST'});
+  const d=await r.json();
+  gwMsg(d.status==='already_seeded'?'Already seeded':`Seeded ${d.count} members`);
+  _gwLoaded=false; loadGiveaway();
+}
+
+async function gwReset(){
+  if(!confirm('Reset cycle? This starts a fresh pool with all members.')) return;
+  const r=await fetch('/api/giveaway/reset',{method:'POST'});
+  const d=await r.json();
+  if(r.ok){ gwMsg(`Cycle ${d.cycle} started — ${d.count} members`); _gwLoaded=false; loadGiveaway(); }
+  else gwMsg('Error',false);
+}
+
+async function gwAddMember(){
+  const id=$('gwAddId').value.trim(), display=$('gwAddName').value.trim();
+  if(!id||!display){ gwMsg('ID and name required',false); return; }
+  const r=await fetch('/api/giveaway/members',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({id,display})});
+  const d=await r.json();
+  if(r.ok){ gwMsg(d.status==='already_in_pool'?'Already in pool':'Added ✓'); $('gwAddId').value=''; $('gwAddName').value=''; _gwLoaded=false; loadGiveaway(); }
+  else gwMsg('Error',false);
+}
+
+async function gwRemoveMember(id, name){
+  if(!confirm(`Remove ${name} from pool?`)) return;
+  const r=await fetch(`/api/giveaway/members/${encodeURIComponent(id)}`,{method:'DELETE'});
+  const d=await r.json();
+  if(r.ok){ gwMsg('Removed ✓'); _gwLoaded=false; loadGiveaway(); }
+  else gwMsg('Error',false);
 }
 </script>
 </body></html>"""
