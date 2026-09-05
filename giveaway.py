@@ -123,8 +123,8 @@ def update_giveaway(gid: int, **kwargs) -> dict:
             row = c.execute("SELECT * FROM giveaways WHERE id=?", (gid,)).fetchone()
             if not row:
                 return {"error": "not_found"}
-            if row["status"] not in ("draft", "open"):
-                return {"error": f"cannot edit in status '{row['status']}'"}
+            if row["status"] == "closed":
+                return {"error": "cannot edit a closed giveaway"}
             allowed = {"title", "prize", "draw_at", "reveal_at"}
             updates = {k: v for k, v in kwargs.items() if k in allowed}
             if not updates:
@@ -284,6 +284,11 @@ def invalidate_and_redraw(gid: int, reason: str) -> dict:
                     "WHERE id=?",
                     (reason, now, draw["id"]),
                 )
+                # Remove disqualified winner from entries so they cannot win again in this redraw
+                c.execute(
+                    "DELETE FROM giveaway_entries WHERE giveaway_id=? AND member_id=?",
+                    (gid, draw["winner_id"]),
+                )
                 # If revealed, undo rotation entry
                 if row["status"] == "revealed":
                     cycle = _get_cycle(c)
@@ -339,8 +344,8 @@ def add_entry(giveaway_id: int, member_id: str, display_name: str) -> dict:
             row = c.execute("SELECT status FROM giveaways WHERE id=?", (giveaway_id,)).fetchone()
             if not row:
                 return {"error": "not_found"}
-            if row["status"] not in ("draft", "open"):
-                return {"error": f"cannot add entry in status '{row['status']}'"}
+            if row["status"] == "closed":
+                return {"error": "giveaway is closed"}
             try:
                 c.execute(
                     "INSERT INTO giveaway_entries(giveaway_id, member_id, display_name, added_at) VALUES(?,?,?,?)",
@@ -357,8 +362,8 @@ def remove_entry(giveaway_id: int, member_id: str) -> dict:
             row = c.execute("SELECT status FROM giveaways WHERE id=?", (giveaway_id,)).fetchone()
             if not row:
                 return {"error": "not_found"}
-            if row["status"] not in ("draft", "open"):
-                return {"error": f"cannot remove entry in status '{row['status']}'"}
+            if row["status"] == "closed":
+                return {"error": "giveaway is closed"}
             cur = c.execute(
                 "DELETE FROM giveaway_entries WHERE giveaway_id=? AND member_id=?",
                 (giveaway_id, member_id),

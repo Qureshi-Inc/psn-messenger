@@ -1623,12 +1623,13 @@ async def giveaway_create(request: Request):
     if not session or not await _is_iam_admin(session.get("sub", "")):
         raise HTTPException(status_code=403, detail="admin only")
     body = await request.json()
+    reveal_at = body.get("reveal_at")
     result = await asyncio.to_thread(
         _giveaway.create_giveaway,
         body.get("title", ""),
         body.get("prize", ""),
-        body.get("draw_at"),
-        body.get("reveal_at"),
+        body.get("draw_at", reveal_at),  # draw_at = reveal_at unless explicitly separate
+        reveal_at,
     )
     return JSONResponse(result)
 
@@ -1639,9 +1640,12 @@ async def giveaway_update(request: Request, gid: int):
     if not session or not await _is_iam_admin(session.get("sub", "")):
         raise HTTPException(status_code=403, detail="admin only")
     body = await request.json()
-    result = await asyncio.to_thread(_giveaway.update_giveaway, gid, **{
-        k: body.get(k) for k in ("title", "prize", "draw_at", "reveal_at") if k in body
-    })
+    reveal_at = body.get("reveal_at")
+    updates = {k: body[k] for k in ("title", "prize") if k in body}
+    if "reveal_at" in body:
+        updates["reveal_at"] = reveal_at
+        updates["draw_at"] = body.get("draw_at", reveal_at)
+    result = await asyncio.to_thread(_giveaway.update_giveaway, gid, **updates)
     if result and "error" in result:
         raise HTTPException(status_code=400, detail=result["error"])
     return JSONResponse(result)
@@ -3104,7 +3108,7 @@ _DASHBOARD_TMPL = r"""<!doctype html>
 
   /* panel animation */
   .panel { display:none; }
-  .panel.on { display:block; animation:panelIn .4s cubic-bezier(0.34,1.56,0.64,1) both; }
+  .panel.on { display:block; animation:panelIn .4s cubic-bezier(0.34,1.56,0.64,1) both; overflow-x:hidden; }
   @keyframes panelIn {
     from { opacity:0; transform:translateY(12px) scale(.985); }
     to   { opacity:1; transform:none; } }
@@ -5342,29 +5346,40 @@ function gwWireTimers(d){
 }
 
 function gwAdminCreate(){
-  return '<div class="gw-admin" id="gwAdmin"><h3>Admin — Create Giveaway</h3><div class="gw-admin-field"><label>Title</label><input type="text" id="gwNewTitle" placeholder="October Giveaway"></div><div class="gw-admin-field"><label>Prize</label><input type="text" id="gwNewPrize" placeholder="PS5 game, $50 PSN card..."></div><div class="gw-admin-field"><label>Draw date &amp; time</label><input type="datetime-local" id="gwNewDraw"></div><div class="gw-admin-field"><label>Reveal date &amp; time (leave blank = same as draw)</label><input type="datetime-local" id="gwNewReveal"></div><div class="gw-admin-actions"><button class="gw-btn-primary" onclick="gwCreate()">Create Draft</button></div><div id="gwMsg" style="font-size:12px;margin-top:8px;color:var(--dim)"></div></div>';
+  return '<div class="gw-admin" id="gwAdmin"><h3>Admin — Create Giveaway</h3>'
+    +'<div class="gw-admin-field"><label>Title</label><input type="text" id="gwNewTitle" placeholder="October Giveaway"></div>'
+    +'<div class="gw-admin-field"><label>Prize</label><input type="text" id="gwNewPrize" placeholder="PS5 game, $50 PSN card..."></div>'
+    +'<div class="gw-admin-field"><label>Reveal date &amp; time</label><input type="datetime-local" id="gwNewReveal"></div>'
+    +'<div class="gw-admin-actions"><button class="gw-btn-primary" onclick="gwCreate()">Create Draft</button></div>'
+    +'<div id="gwMsg" style="font-size:12px;margin-top:8px;color:var(--dim)"></div></div>';
 }
 
 function gwAdminPanel(g, d){
   const status=g.status;
   const badge='<div class="gw-status-badge gw-status-'+status+'">'+status+'</div>';
   let inner='';
+  // Winner preview for drawn/revealed
   if(status==='drawn'||status==='revealed'){
     const w=g.active_draw;
     if(w) inner+='<div class="gw-admin-preview"><div class="gw-ap-lbl">🔒 Winner (admin preview)</div><div class="gw-ap-name">'+esc(w.winner_name)+'</div><div style="font-size:11px;color:var(--dim);margin-top:2px">Draw #'+w.draw_number+' · '+esc(w.manifest_hash||'')+(w.drawn_at?' · '+w.drawn_at.slice(0,10):'')+'</div></div>';
   }
-  if(status==='draft'||status==='open'){
-    inner+='<div class="gw-admin-field"><label>Title</label><input type="text" id="gwEditTitle" value="'+esc(g.title||'')+'"></div><div class="gw-admin-field"><label>Prize</label><input type="text" id="gwEditPrize" value="'+esc(g.prize||'')+'"></div><div class="gw-admin-field"><label>Draw date &amp; time</label><input type="datetime-local" id="gwEditDraw" value="'+(g.draw_at?g.draw_at.slice(0,16):'')+'"></div><div class="gw-admin-field"><label>Reveal date &amp; time</label><input type="datetime-local" id="gwEditReveal" value="'+(g.reveal_at?g.reveal_at.slice(0,16):'')+'"></div><button class="gw-btn-secondary" onclick="gwUpdate('+g.id+')" style="margin-bottom:12px">Save</button>';
-    inner+='<div style="font-size:11px;color:var(--dim);margin-bottom:6px">Eligible entries ('+g.entries.length+')</div><div class="gw-entry-list">'+(g.entries.map(e=>'<div class="gw-entry-row"><span>'+esc(e.display_name)+'</span><button class="gw-entry-remove" onclick="gwRemoveEntry('+g.id+',\''+esc(e.member_id)+'\',\''+esc(e.display_name)+'\')">×</button></div>').join('')||'<div style="font-size:12px;color:var(--dim);padding:4px">No entries yet — publish to auto-populate from rotation</div>')+'</div>';
-    if(status==='open'&&d.rotation?.eligible?.length){
-      const avail=(d.rotation.eligible||[]).filter(m=>!g.entries.find(e=>e.member_id===m.id));
-      if(avail.length) inner+='<div class="gw-admin-field"><label>Add member</label><select id="gwAddEntry">'+avail.map(m=>'<option value="'+esc(m.id)+'" data-display="'+esc(m.display)+'">'+esc(m.display)+'</option>').join('')+'</select></div><button class="gw-btn-secondary" onclick="gwAddEntry('+g.id+')" style="margin-bottom:12px">Add to draw</button>';
-    }
+  // Edit form always visible (except closed)
+  if(status!=='closed'){
+    inner+='<div class="gw-admin-field"><label>Title</label><input type="text" id="gwEditTitle" value="'+esc(g.title||'')+'"></div>'
+      +'<div class="gw-admin-field"><label>Prize</label><input type="text" id="gwEditPrize" value="'+esc(g.prize||'')+'"></div>'
+      +'<div class="gw-admin-field"><label>Reveal date &amp; time</label><input type="datetime-local" id="gwEditReveal" value="'+(g.reveal_at?g.reveal_at.slice(0,16):'')+'"></div>'
+      +'<button class="gw-btn-secondary" onclick="gwUpdate('+g.id+')" style="margin-bottom:12px">Save</button>';
+    // Entry management always visible (except closed)
+    inner+='<div style="font-size:11px;color:var(--dim);margin-bottom:6px">Entries ('+g.entries.length+')</div>'
+      +'<div class="gw-entry-list">'+(g.entries.map(e=>'<div class="gw-entry-row"><span>'+esc(e.display_name)+'</span><button class="gw-entry-remove" onclick="gwRemoveEntry('+g.id+',\''+esc(e.member_id)+'\',\''+esc(e.display_name)+'\')">×</button></div>').join('')||'<div style="font-size:12px;color:var(--dim);padding:4px">No entries yet — publish to auto-populate from rotation</div>')+'</div>';
+    const allPortal=(d.rotation?.eligible||[]);
+    const avail=allPortal.filter(m=>!g.entries.find(e=>e.member_id===m.id));
+    if(avail.length) inner+='<div class="gw-admin-field"><label>Add member</label><select id="gwAddEntry">'+avail.map(m=>'<option value="'+esc(m.id)+'" data-display="'+esc(m.display)+'">'+esc(m.display)+'</option>').join('')+'</select></div><button class="gw-btn-secondary" onclick="gwAddEntry('+g.id+')" style="margin-bottom:12px">Add to draw</button>';
   }
+  // State actions
   const actions=[];
   if(status==='draft') actions.push('<button class="gw-btn-primary" onclick="gwPublish('+g.id+')">Publish Giveaway</button>');
-  if(status==='open') actions.push('<button class="gw-btn-primary" onclick="gwLock('+g.id+')">Lock Entries</button>','<button class="gw-btn-secondary" onclick="gwDraw('+g.id+')">Draw Now</button>');
-  if(status==='locked') actions.push('<button class="gw-btn-primary" onclick="gwDraw('+g.id+')">🎲 Draw Winner</button>');
+  if(status==='open'||status==='locked') actions.push('<button class="gw-btn-primary" onclick="gwDraw('+g.id+')">🎲 Draw Winner</button>');
   if(status==='drawn') actions.push('<button class="gw-btn-primary" onclick="gwReveal('+g.id+')">🎉 Reveal Winner</button>');
   if(status==='revealed') actions.push('<button class="gw-btn-secondary" onclick="gwClose('+g.id+')">Close Giveaway</button>','<button class="gw-btn-danger" onclick="gwRedraw('+g.id+')">Disqualify &amp; Redraw</button>');
   return '<div class="gw-admin" id="gwAdmin"><h3>Admin</h3>'+badge+inner+'<div class="gw-admin-actions">'+actions.join('')+'</div><div id="gwMsg" style="font-size:12px;margin-top:8px;color:var(--dim)"></div></div>';
@@ -5413,14 +5428,14 @@ function _gwReload(){ _gwLoaded=false; $('giveaway-inner').innerHTML='<div class
 
 async function gwCreate(){
   const title=($('gwNewTitle')||{}).value?.trim()||'',prize=($('gwNewPrize')||{}).value?.trim()||'';
-  const draw_at=($('gwNewDraw')||{}).value||'',reveal_at=($('gwNewReveal')||{}).value||'';
-  const r=await fetch('/api/giveaway',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({title,prize,draw_at:draw_at||null,reveal_at:reveal_at||null})});
+  const reveal_at=($('gwNewReveal')||{}).value||'';
+  const r=await fetch('/api/giveaway',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({title,prize,reveal_at:reveal_at||null})});
   const d=await r.json(); if(r.ok){ gwMsg('Draft created ✓'); _gwReload(); } else gwMsg(d.detail||'Error',false);
 }
 async function gwUpdate(id){
   const title=($('gwEditTitle')||{}).value?.trim()||'',prize=($('gwEditPrize')||{}).value?.trim()||'';
-  const draw_at=($('gwEditDraw')||{}).value||'',reveal_at=($('gwEditReveal')||{}).value||'';
-  const r=await fetch('/api/giveaway/'+id,{method:'PUT',headers:{'Content-Type':'application/json'},body:JSON.stringify({title,prize,draw_at:draw_at||null,reveal_at:reveal_at||null})});
+  const reveal_at=($('gwEditReveal')||{}).value||'';
+  const r=await fetch('/api/giveaway/'+id,{method:'PUT',headers:{'Content-Type':'application/json'},body:JSON.stringify({title,prize,reveal_at:reveal_at||null})});
   const d=await r.json(); if(r.ok){ gwMsg('Saved ✓'); _gwReload(); } else gwMsg(d.detail||'Error',false);
 }
 async function gwPublish(id){ const r=await fetch('/api/giveaway/'+id+'/publish',{method:'POST'}); const d=await r.json(); if(r.ok){ gwMsg('Published — '+d.entries+' members eligible ✓'); _gwReload(); } else gwMsg(d.detail||d.error||'Error',false); }
