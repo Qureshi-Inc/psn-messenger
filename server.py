@@ -5314,7 +5314,7 @@ async function loadGiveaway(){
     ]);
     // If reveal date already passed and not yet revealed, auto-trigger immediately
     const g=d.giveaway;
-    if(g&&d.is_admin&&['open','locked','drawn'].includes(g.status)&&g.reveal_at&&new Date(g.reveal_at)<=new Date()){
+    if(g&&d.is_admin&&['open','locked','drawn'].includes(g.status)&&g.reveal_at&&(gwParseLocalDate(g.reveal_at)||Infinity)<=Date.now()){
       await fetch('/api/giveaway/'+g.id+'/draw-and-reveal',{method:'POST'});
       _gwLoaded=false; loadGiveaway(); return;
     }
@@ -5360,21 +5360,32 @@ function gwTimerHtml(id){
   return '<div class="gw-timer"><div class="gw-unit"><div class="gw-unit-val" id="'+id+'D">--</div><div class="gw-unit-lbl">Days</div></div><div class="gw-unit"><div class="gw-unit-val" id="'+id+'H">--</div><div class="gw-unit-lbl">Hrs</div></div><div class="gw-unit"><div class="gw-unit-val" id="'+id+'M">--</div><div class="gw-unit-lbl">Min</div></div><div class="gw-unit"><div class="gw-unit-val" id="'+id+'S">--</div><div class="gw-unit-lbl">Sec</div></div></div>';
 }
 
-function gwWireTimers(d){
-  const g=d.giveaway; if(!g) return;
-  if(_gwTimer) clearInterval(_gwTimer);
-  let target=null, prefix=null;
-  if(g.status==='drawn'&&!d.is_admin&&g.reveal_at){ target=new Date(g.reveal_at).getTime(); prefix='gwReveal'; }
-  else if(['open','locked','draft'].includes(g.status)&&g.reveal_at){ target=new Date(g.reveal_at).getTime(); prefix='gwDraw'; }
-  if(!target||!prefix) return;
+function gwParseLocalDate(str){
+  // Parse datetime-local strings ("2026-10-01T18:30" or "2026-10-01") as LOCAL
+  // time, not UTC — new Date("YYYY-MM-DD") is UTC in browsers and shifts the
+  // date by timezone offset. Parsing components explicitly is always local.
+  if(!str) return null;
+  try{
+    const [datePart, timePart='00:00'] = str.split('T');
+    const [yr,mo,dy]=datePart.split('-').map(Number);
+    const [hr,mn]=(timePart||'00:00').slice(0,5).split(':').map(Number);
+    const t=new Date(yr, mo-1, dy, hr||0, mn||0, 0, 0).getTime();
+    return isNaN(t)?null:t;
+  }catch(e){ return null; }
+}
+
+function gwStartCountdown(revealAtStr, prefix, isAdmin, giveawayId, status){
+  if(_gwTimer){ clearInterval(_gwTimer); _gwTimer=null; }
+  if(!prefix) return;
+  const target=gwParseLocalDate(revealAtStr);
+  if(!target) return;
   function tick(){
     const diff=target-Date.now();
     if(diff<=0){
-      clearInterval(_gwTimer);
+      clearInterval(_gwTimer); _gwTimer=null;
       ['D','H','M','S'].forEach(u=>{ const el=$(prefix+u); if(el) el.textContent='0'; });
-      // Auto-reveal when timer expires: admin triggers draw+reveal, others just reload
-      if(d.is_admin&&g.status!=='revealed'&&g.status!=='closed'){
-        fetch('/api/giveaway/'+g.id+'/draw-and-reveal',{method:'POST'})
+      if(isAdmin&&status!=='revealed'&&status!=='closed'){
+        fetch('/api/giveaway/'+giveawayId+'/draw-and-reveal',{method:'POST'})
           .then(()=>setTimeout(_gwReload,600));
       } else {
         setTimeout(_gwReload,800);
@@ -5389,6 +5400,14 @@ function gwWireTimers(d){
     if($(prefix+'S')) $(prefix+'S').textContent=String(s).padStart(2,'0');
   }
   tick(); _gwTimer=setInterval(tick,1000);
+}
+
+function gwWireTimers(d){
+  const g=d.giveaway; if(!g) return;
+  let prefix=null;
+  if(g.status==='drawn'&&!d.is_admin) prefix='gwReveal';
+  else if(['open','locked','draft','drawn'].includes(g.status)) prefix='gwDraw';
+  gwStartCountdown(g.reveal_at, prefix, d.is_admin, g.id, g.status);
 }
 
 function gwAdminCreate(){
@@ -5488,7 +5507,17 @@ async function gwUpdate(id){
   const title=($('gwEditTitle')||{}).value?.trim()||'',prize=($('gwEditPrize')||{}).value?.trim()||'';
   const reveal_at=($('gwEditReveal')||{}).value||'';
   const r=await fetch('/api/giveaway/'+id,{method:'PUT',headers:{'Content-Type':'application/json'},body:JSON.stringify({title,prize,reveal_at:reveal_at||null})});
-  const d=await r.json(); if(r.ok){ gwMsg('Saved ✓'); _gwReload(); } else gwMsg(d.detail||'Error',false);
+  const d=await r.json();
+  if(r.ok){
+    gwMsg('Saved ✓');
+    // Restart countdown immediately with new date — don't wait for full reload
+    if(reveal_at){
+      const g=d; // PUT returns updated giveaway
+      const prefix=['open','locked','draft','drawn'].includes(g.status)?'gwDraw':null;
+      gwStartCountdown(reveal_at, prefix, true, id, g.status);
+    }
+    _gwReload();
+  } else gwMsg(d.detail||'Error',false);
 }
 async function gwPublish(id){ const r=await fetch('/api/giveaway/'+id+'/publish',{method:'POST'}); const d=await r.json(); if(r.ok){ gwMsg('Published — '+d.entries+' members eligible ✓'); _gwReload(); } else gwMsg(d.detail||d.error||'Error',false); }
 async function gwLock(id){ const r=await fetch('/api/giveaway/'+id+'/lock',{method:'POST'}); if(r.ok){ gwMsg('Entries locked ✓'); _gwReload(); } else{ const d=await r.json(); gwMsg(d.detail||'Error',false); } }
