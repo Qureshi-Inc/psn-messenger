@@ -1832,8 +1832,15 @@ async def api_psn_link(request: Request):
     if not npsso:
         return JSONResponse({"error": "token is required"}, status_code=400)
     zitadel_user_id = session.get("sub", "")
+    # Derive a display username from the session email (email prefix) so every
+    # user linked via Zitadel gets an @username shown on the squad page.
+    # Preserve any existing mm_username that was set via the old Mattermost flow.
+    email = session.get("email", "")
+    derived_username = email.split("@")[0] if email else ""
+    existing = portal_mod.find_by_zitadel_id(zitadel_user_id)
+    mm_username = (existing or {}).get("mm_username") or derived_username
     try:
-        result = portal_mod.link_user(npsso, zitadel_user_id=zitadel_user_id)
+        result = portal_mod.link_user(npsso, mm_username=mm_username, zitadel_user_id=zitadel_user_id)
     except portal_mod.LinkError as e:
         return JSONResponse({"error": str(e)}, status_code=400)
     except Exception as e:
@@ -4063,7 +4070,8 @@ function renderSquad(){
     if(m.playing && g){ st='<span class="game-badge">🎮 On <b>'+esc(g)+'</b></span>'; cls='playing'; }
     else if(g){ st='<span class="lastgame">'+esc(g)+'</span>'; }
     else { st='<span class="lastgame">no recent game</span>'; }
-    const mm=m.mm_username?'<span class="mm">@'+esc(m.mm_username)+'</span>':'';
+    const mm_val=m.mm_username||m.online_id||null;
+    const mm=mm_val?'<span class="mm">@'+esc(mm_val)+'</span>':'';
     return '<div class="row '+cls+'">'+avImg+'<div class="who"><div class="name"><span class="dot"></span>'+name+mm+'</div>'+
       '<div class="state">'+st+'</div></div>'+trophyCells(m)+'</div>';
   }).join('');
