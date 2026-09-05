@@ -142,14 +142,10 @@ def publish_giveaway(gid: int, all_members: list[dict]) -> dict:
                 return {"error": "not_found"}
             if row["status"] != "draft":
                 return {"error": f"must be draft, is '{row['status']}'"}
-            cycle = _get_cycle(c)
-            won_ids = {r["member_id"] for r in c.execute(
-                "SELECT member_id FROM rotation_history WHERE cycle=?", (cycle,)).fetchall()}
-            eligible = [m for m in all_members if m["id"] not in won_ids]
-            if not eligible:
-                return {"error": "no eligible members — everyone has won this rotation"}
+            if not all_members:
+                return {"error": "no members found in portal"}
             now = _now()
-            for m in eligible:
+            for m in all_members:
                 try:
                     c.execute(
                         "INSERT INTO giveaway_entries(giveaway_id, member_id, display_name, added_at) VALUES(?,?,?,?)",
@@ -158,7 +154,7 @@ def publish_giveaway(gid: int, all_members: list[dict]) -> dict:
                 except sqlite3.IntegrityError:
                     pass
             c.execute("UPDATE giveaways SET status='open' WHERE id=?", (gid,))
-            return {"status": "ok", "entries": len(eligible)}
+            return {"status": "ok", "entries": len(all_members)}
 
 
 def lock_giveaway(gid: int) -> dict:
