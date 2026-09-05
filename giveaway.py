@@ -31,13 +31,22 @@ def _append_history(entry: dict):
     HISTORY_FILE.write_text(json.dumps(history, indent=2))
 
 
+def _dedup(members: list[dict]) -> list[dict]:
+    seen: set = set()
+    out = []
+    for m in members:
+        if m["id"] not in seen:
+            seen.add(m["id"])
+            out.append(m)
+    return out
+
 def seed(all_members: list[dict]) -> dict:
     """Initialise the pool from platform members. Safe to re-call if already seeded."""
     with _lock:
         pool = _load_pool()
         if pool["members"]:
             return {"status": "already_seeded", "count": len(pool["members"])}
-        pool["members"] = [{"id": m["id"], "display": m["display"]} for m in all_members]
+        pool["members"] = _dedup([{"id": m["id"], "display": m["display"]} for m in all_members])
         _save_pool(pool)
         return {"status": "seeded", "count": len(pool["members"])}
 
@@ -47,7 +56,7 @@ def reset(all_members: list[dict]) -> dict:
     with _lock:
         pool = _load_pool()
         pool["cycle"] += 1
-        pool["members"] = [{"id": m["id"], "display": m["display"]} for m in all_members]
+        pool["members"] = _dedup([{"id": m["id"], "display": m["display"]} for m in all_members])
         _save_pool(pool)
         return {"status": "reset", "cycle": pool["cycle"], "count": len(pool["members"])}
 

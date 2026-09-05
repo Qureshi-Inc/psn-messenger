@@ -1589,8 +1589,13 @@ async def giveaway_state(request: Request):
     if not session:
         return JSONResponse({"error": "not authenticated"}, status_code=401)
     user_id = session.get("sub", "")
+    is_admin = await _is_iam_admin(user_id)
     state = await asyncio.to_thread(_giveaway.get_state)
-    state["is_admin"] = await _is_iam_admin(user_id)
+    state["is_admin"] = is_admin
+    if is_admin:
+        pool_ids = {m["id"] for m in state.get("pool_members", [])}
+        all_members = await asyncio.to_thread(_portal_members)
+        state["available_members"] = [m for m in all_members if m["id"] not in pool_ids]
     return JSONResponse(state)
 
 @app.get("/api/giveaway/history")
@@ -5204,8 +5209,7 @@ function renderGiveaway(state, history){
     <div style="font-size:12px;color:var(--dim);margin-bottom:8px">Pool members</div>
     <div class="giveaway-member-list" id="gwMemberList">${renderGwMembers(state.pool_members||[])}</div>
     <div class="ga-row" style="margin-bottom:12px">
-      <input type="text" id="gwAddId" placeholder="Zitadel user ID">
-      <input type="text" id="gwAddName" placeholder="Display name">
+      <select id="gwAddSelect" style="flex:1;background:rgba(255,255,255,.06);border:1px solid rgba(255,255,255,.12);border-radius:8px;padding:8px 12px;color:var(--txt);font-size:13px;outline:none;">${(state.available_members||[]).map(m=>`<option value="${esc(m.id)}" data-display="${esc(m.display)}">${esc(m.display)}</option>`).join('')}</select>
       <button class="btn-sm" onclick="gwAddMember()">Add</button>
     </div>
     <div class="ga-row" style="gap:8px;flex-wrap:wrap">
@@ -5267,11 +5271,13 @@ async function gwReset(){
 }
 
 async function gwAddMember(){
-  const id=$('gwAddId').value.trim(), display=$('gwAddName').value.trim();
-  if(!id||!display){ gwMsg('ID and name required',false); return; }
+  const sel=$('gwAddSelect');
+  if(!sel||!sel.value){ gwMsg('Select a member first',false); return; }
+  const id=sel.value;
+  const display=sel.selectedOptions[0]?.dataset?.display||sel.selectedOptions[0]?.textContent||id;
   const r=await fetch('/api/giveaway/members',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({id,display})});
   const d=await r.json();
-  if(r.ok){ gwMsg(d.status==='already_in_pool'?'Already in pool':'Added ✓'); $('gwAddId').value=''; $('gwAddName').value=''; _gwLoaded=false; loadGiveaway(); }
+  if(r.ok){ gwMsg(d.status==='already_in_pool'?'Already in pool':'Added ✓'); _gwLoaded=false; loadGiveaway(); }
   else gwMsg('Error',false);
 }
 
