@@ -1972,9 +1972,11 @@ def _check_arc_alert(squad: list[dict]) -> None:
         _arc_alerted = False
 
 
-# === PSN → WhatsApp video forwarder =========================================
+# === PSN → WhatsApp / Discord video forwarder ================================
 WA_BRIDGE_URL  = os.environ.get("WA_BRIDGE_URL", "")
 WA_GOOPERS_JID = os.environ.get("WA_GOOPERS_JID", "")
+DISCORD_BOT_TOKEN       = os.environ.get("DISCORD_BOT_TOKEN", "")
+DISCORD_CLIPS_CHANNEL_ID = os.environ.get("DISCORD_CLIPS_CHANNEL_ID", "")
 
 # Resolve WA bridge host — host.docker.internal may not exist in Coolify
 if WA_BRIDGE_URL:
@@ -2108,6 +2110,41 @@ def _send_to_wa(message_uid: str, video_bytes: bytes, sender: str, body: str = "
     raise ClipError(f"WA bridge error {r.status_code}: {r.text[:200]}")
 
 
+def _send_to_discord(message_uid: str, video_bytes: bytes, sender: str, body: str = "") -> None:
+    """Upload video to #crcmz-clips via Discord bot. Best-effort — never raises."""
+    if not DISCORD_BOT_TOKEN or not DISCORD_CLIPS_CHANNEL_ID:
+        return
+    import json as _json
+    import httpx as _httpx
+    import re as _re
+
+    DISCORD_MAX_BYTES = 25 * 1024 * 1024
+    if len(video_bytes) > DISCORD_MAX_BYTES:
+        logger.warning("clip_discord_skip uid=%s size=%d exceeds 25MB Discord limit",
+                       message_uid, len(video_bytes))
+        return
+
+    real_body = body if body and not _re.fullmatch(r'.+ sent a video clip\.', body, _re.IGNORECASE) else ""
+    caption = f"🎮 {sender}: {real_body}" if real_body else f"🎮 {sender}"
+
+    try:
+        r = _httpx.post(
+            f"https://discord.com/api/v10/channels/{DISCORD_CLIPS_CHANNEL_ID}/messages",
+            headers={"Authorization": f"Bot {DISCORD_BOT_TOKEN}"},
+            data={"payload_json": _json.dumps({"content": caption})},
+            files={"file": ("clip.mp4", video_bytes, "video/mp4")},
+            timeout=120,
+        )
+        if r.status_code in (200, 201):
+            logger.info("clip_discord_sent uid=%s messageId=%s", message_uid,
+                        r.json().get("id"))
+        else:
+            logger.error("clip_discord_failed uid=%s status=%d body=%s",
+                         message_uid, r.status_code, r.text[:200])
+    except Exception as exc:
+        logger.error("clip_discord_failed uid=%s: %s", message_uid, exc)
+
+
 def _process_clip_job(message_uid: str, job: dict) -> str | None:
     """Run the full clip pipeline synchronously. Returns wa_message_id.
 
@@ -2129,6 +2166,7 @@ def _process_clip_job(message_uid: str, job: dict) -> str | None:
         video_bytes = _cstore.load(storage_key)
         if not video_bytes:
             raise ClipError(f"archived clip missing from store: {storage_key}")
+        _send_to_discord(message_uid, video_bytes, sender, body)
         return _send_to_wa(message_uid, video_bytes, sender, body)
 
     # ── Resolve + download ────────────────────────────────────────────────────
@@ -2162,6 +2200,7 @@ def _process_clip_job(message_uid: str, job: dict) -> str | None:
     )
 
     # ── Send ─────────────────────────────────────────────────────────────────
+    _send_to_discord(message_uid, result.data, sender, body)
     return _send_to_wa(message_uid, result.data, sender, body)
 
 

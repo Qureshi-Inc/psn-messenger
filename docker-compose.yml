@@ -23,6 +23,8 @@ services:
       - WHATSAPP_IMPORT_ALLOWED_ROLE=${WHATSAPP_IMPORT_ALLOWED_ROLE:-IAM Owner Viewer}
       - WA_INGEST_SECRET=${WA_INGEST_SECRET:-}
       - WA_NAME_ALIASES=${WA_NAME_ALIASES:-}
+      - DISCORD_BOT_TOKEN=${DISCORD_BOT_TOKEN:-}
+      - DISCORD_CLIPS_CHANNEL_ID=${DISCORD_CLIPS_CHANNEL_ID:-}
     extra_hosts:
       - "host.docker.internal:host-gateway"
     ports:
