@@ -69,11 +69,10 @@ def run_draw(all_members: list[dict]) -> dict:
     month = date.today().strftime("%Y-%m")
     with _lock:
         history = _load_history()
-        existing = next((e for e in history if e.get("month") == month), None)
+        pool = _load_pool()
+        existing = next((e for e in history if e.get("month") == month and e.get("cycle") == pool["cycle"]), None)
         if existing:
             return {"status": "already_drawn", **existing}
-
-        pool = _load_pool()
 
         if not pool["members"]:
             cycle_winners = [e for e in history if e.get("cycle") == pool["cycle"]]
@@ -142,8 +141,8 @@ def get_state() -> dict:
     with _lock:
         pool = _load_pool()
         history = _load_history()
-        latest = history[-1] if history else None
         cycle_winners = [e for e in history if e.get("cycle") == pool["cycle"]]
+        latest = cycle_winners[-1] if cycle_winners else None
         total_in_cycle = len(pool["members"]) + len(cycle_winners)
         return {
             "cycle": pool["cycle"],
