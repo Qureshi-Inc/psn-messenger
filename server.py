@@ -1574,13 +1574,18 @@ async def wa_ingest(request: Request):
 
 def _portal_members() -> list[dict]:
     users = portal_mod.list_users()
-    out = []
+    # Deduplicate by account_id — same PSN account linked under two different files
+    # (e.g. old mm-keyed file + new z-<id>.json) would otherwise appear twice in draws.
+    seen: dict[str, dict] = {}  # account_id (or zitadel_id as fallback) -> entry
     for u in users:
         if not u.get("zitadel_user_id"):
             continue
         display = u.get("online_id") or u.get("mm_username") or u["zitadel_user_id"]
-        out.append({"id": u["zitadel_user_id"], "display": display})
-    return out
+        entry = {"id": u["zitadel_user_id"], "display": display}
+        dedup_key = str(u.get("account_id") or u["zitadel_user_id"])
+        if dedup_key not in seen:
+            seen[dedup_key] = entry
+    return list(seen.values())
 
 
 @app.get("/api/giveaway")
@@ -1764,6 +1769,27 @@ async def giveaway_remove_entry(request: Request, gid: int, member_id: str):
     if result and "error" in result:
         raise HTTPException(status_code=400, detail=result["error"])
     return JSONResponse(result)
+
+@app.post("/api/giveaway/admin/reset-and-seed")
+async def giveaway_admin_reset(request: Request):
+    session = _get_session(request)
+    if not session or not await _is_iam_admin(session.get("sub", "")):
+        raise HTTPException(status_code=403, detail="admin only")
+    body = await request.json()
+    query = (body.get("winner_query") or "").strip().lower()
+    if not query:
+        raise HTTPException(status_code=400, detail="winner_query required")
+    members = await asyncio.to_thread(_portal_members)
+    matches = [m for m in members if query in m["display"].lower()]
+    if not matches:
+        return JSONResponse({"error": "no_match", "all_members": members}, status_code=404)
+    if len(matches) > 1:
+        return JSONResponse({"error": "ambiguous", "matches": matches}, status_code=409)
+    winner = matches[0]
+    await asyncio.to_thread(_giveaway.reset_all)
+    result = await asyncio.to_thread(_giveaway.add_past_winner, winner["id"], winner["display"], 1)
+    return JSONResponse({"status": "ok", "seeded_winner": winner, "add_result": result})
+
 
 @app.get("/auth/settings/psn")
 async def settings_psn_status(request: Request):
@@ -5416,6 +5442,12 @@ function gwAdminCreate(){
     +'<div class="gw-admin-field"><label>Prize</label><input type="text" id="gwNewPrize" placeholder="PS5 game, $50 PSN card..."></div>'
     +'<div class="gw-admin-field"><label>Reveal date &amp; time</label><input type="datetime-local" id="gwNewReveal"></div>'
     +'<div class="gw-admin-actions"><button class="gw-btn-primary" onclick="gwCreate()">🎁 Start Giveaway</button></div>'
+    +'<hr style="border:none;border-top:1px solid rgba(255,255,255,.08);margin:18px 0">'
+    +'<div style="font-size:11px;color:var(--dim);margin-bottom:8px">Danger zone — reset all giveaway data</div>'
+    +'<div style="display:flex;gap:8px;align-items:center">'
+    +'<input type="text" id="gwSeedQuery" placeholder="Past winner name (e.g. mutasif)" style="flex:1;padding:6px 10px;border-radius:8px;border:1px solid rgba(255,80,80,.35);background:rgba(255,50,50,.08);color:inherit;font-size:13px">'
+    +'<button class="gw-btn-danger" onclick="gwResetAndSeed()">Reset &amp; Seed</button>'
+    +'</div>'
     +'<div id="gwMsg" style="font-size:12px;margin-top:8px;color:var(--dim)"></div></div>';
 }
 
@@ -5541,6 +5573,17 @@ async function gwRemoveEntry(id,mid,name){
   if(!confirm('Remove '+name+' from this draw?')) return;
   const r=await fetch('/api/giveaway/'+id+'/entries/'+encodeURIComponent(mid),{method:'DELETE'});
   if(r.ok){ gwMsg('Removed ✓'); _gwReload(); } else gwMsg('Error',false);
+}
+async function gwResetAndSeed(){
+  const q=($('gwSeedQuery')||{}).value?.trim();
+  if(!q) return;
+  if(!confirm('This will DELETE all giveaway data and rotation history, then add "'+q+'" as the only past winner. Are you sure?')) return;
+  const r=await fetch('/api/giveaway/admin/reset-and-seed',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({winner_query:q})});
+  const d=await r.json();
+  if(r.ok){ gwMsg('Reset complete. Seeded: '+d.seeded_winner.display+' ✓'); _gwReload(); }
+  else if(d.error==='ambiguous'){ gwMsg('Multiple matches: '+d.matches.map(m=>m.display).join(', ')+' — be more specific',false); }
+  else if(d.error==='no_match'){ gwMsg('No member found matching "'+q+'"',false); }
+  else gwMsg(d.detail||d.error||'Error',false);
 }
 
 </script>

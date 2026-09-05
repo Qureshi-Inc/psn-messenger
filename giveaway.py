@@ -326,6 +326,34 @@ def get_active_giveaway() -> dict | None:
         return get_giveaway(row["id"])
 
 
+def reset_all() -> dict:
+    """Wipe all giveaway data and re-initialize the cycle counter."""
+    with _lock:
+        with _conn() as c:
+            c.executescript("""
+                DELETE FROM rotation_history;
+                DELETE FROM giveaway_draws;
+                DELETE FROM giveaway_entries;
+                DELETE FROM giveaways;
+                UPDATE rotation_meta SET cycle=1 WHERE id=1;
+            """)
+    return {"status": "ok"}
+
+
+def add_past_winner(member_id: str, display_name: str, cycle: int = 1) -> dict:
+    with _lock:
+        with _conn() as c:
+            try:
+                c.execute(
+                    "INSERT INTO rotation_history(cycle, member_id, display_name, won_at, giveaway_id)"
+                    " VALUES(?,?,?,?,?)",
+                    (cycle, member_id, display_name, _now(), None),
+                )
+                return {"status": "ok"}
+            except sqlite3.IntegrityError:
+                return {"status": "already_exists"}
+
+
 def list_past_giveaways(limit: int = 10) -> list[dict]:
     with _conn() as c:
         rows = c.execute(
