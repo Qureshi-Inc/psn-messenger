@@ -340,16 +340,32 @@ def reset_all() -> dict:
     return {"status": "ok"}
 
 
-def add_past_winner(member_id: str, display_name: str, cycle: int = 1) -> dict:
+def add_past_winner(member_id: str, display_name: str, cycle: int = 1,
+                    title: str = "", prize: str = "") -> dict:
     with _lock:
         with _conn() as c:
+            now = _now()
+            giveaway_id = None
+            if title or prize:
+                # Create a closed giveaway record so it shows in history
+                cur = c.execute(
+                    "INSERT INTO giveaways(title, prize, status, created_at, drawn_at, revealed_at, closed_at)"
+                    " VALUES(?,?,'closed',?,?,?,?)",
+                    (title or "Giveaway", prize or "", now, now, now, now),
+                )
+                giveaway_id = cur.lastrowid
+                c.execute(
+                    "INSERT INTO giveaway_draws(giveaway_id, draw_number, winner_id, winner_name,"
+                    " drawn_at, status, manifest_hash) VALUES(?,1,?,?,?,'active','seeded')",
+                    (giveaway_id, member_id, display_name, now),
+                )
             try:
                 c.execute(
                     "INSERT INTO rotation_history(cycle, member_id, display_name, won_at, giveaway_id)"
                     " VALUES(?,?,?,?,?)",
-                    (cycle, member_id, display_name, _now(), None),
+                    (cycle, member_id, display_name, now, giveaway_id),
                 )
-                return {"status": "ok"}
+                return {"status": "ok", "giveaway_id": giveaway_id}
             except sqlite3.IntegrityError:
                 return {"status": "already_exists"}
 

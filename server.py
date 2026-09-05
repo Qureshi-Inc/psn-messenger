@@ -1786,8 +1786,12 @@ async def giveaway_admin_reset(request: Request):
     if len(matches) > 1:
         return JSONResponse({"error": "ambiguous", "matches": matches}, status_code=409)
     winner = matches[0]
+    title = (body.get("title") or "").strip()
+    prize = (body.get("prize") or "").strip()
     await asyncio.to_thread(_giveaway.reset_all)
-    result = await asyncio.to_thread(_giveaway.add_past_winner, winner["id"], winner["display"], 1)
+    result = await asyncio.to_thread(
+        _giveaway.add_past_winner, winner["id"], winner["display"], 1, title, prize
+    )
     return JSONResponse({"status": "ok", "seeded_winner": winner, "add_result": result})
 
 
@@ -3708,7 +3712,7 @@ _DASHBOARD_TMPL = r"""<!doctype html>
       <button class="nav-item" data-p="giveaway" data-icon="🎁" data-label="Giveaway" onclick="tab(this);loadGiveaway()"><span class="nav-i-icon">🎁</span><span>Giveaway</span></button>
     </div>
   </div>
-  <div class="panel on" id="p-squad">
+  <div class="panel" id="p-squad">
     <div id="together"></div>
     <div class="hype-wrap" id="hypeMeter">
       <div class="hype-head">
@@ -4047,22 +4051,21 @@ function tab(btn, skipHash){
   const icon=$('navActiveIcon'), lbl=$('navActiveLabel');
   if(icon) icon.textContent = btn.dataset.icon||'';
   if(lbl)  lbl.textContent  = btn.dataset.label||'';
-  // update URL hash so the view is shareable / linkable
-  if(!skipHash) history.replaceState(null,'','#'+btn.dataset.p);
+  // update URL so the view is shareable and survives auth redirects
+  if(!skipHash) history.replaceState(null,'','?p='+btn.dataset.p);
   // close dropdown with a slight delay so user sees selection
   setTimeout(closeNav, 120);
 }
-// restore tab from URL hash on load
+// restore tab from URL on load — ?p=page survives auth redirects; #hash is legacy fallback
 (function(){
-  const hash = location.hash.replace('#','');
-  if(hash){
-    const btn = document.querySelector('.nav-item[data-p="'+hash+'"]');
-    if(btn){
-      tab(btn, true);
-      if(hash==='slap')    loadSlap();
-      if(hash==='wa')      loadWa();
-      if(hash==='giveaway') loadGiveaway();
-    }
+  const p = new URLSearchParams(location.search).get('p') || location.hash.replace('#','') || 'squad';
+  const btn = document.querySelector('.nav-item[data-p="'+p+'"]') ||
+              document.querySelector('.nav-item[data-p="squad"]');
+  if(btn){
+    tab(btn, true);
+    if(p==='slap')    loadSlap();
+    if(p==='wa')      loadWa();
+    if(p==='giveaway') loadGiveaway();
   }
 })();
 function fmtLast(iso){ if(!iso) return 'offline';
@@ -5444,10 +5447,10 @@ function gwAdminCreate(){
     +'<div class="gw-admin-actions"><button class="gw-btn-primary" onclick="gwCreate()">🎁 Start Giveaway</button></div>'
     +'<hr style="border:none;border-top:1px solid rgba(255,255,255,.08);margin:18px 0">'
     +'<div style="font-size:11px;color:var(--dim);margin-bottom:8px">Danger zone — reset all giveaway data</div>'
-    +'<div style="display:flex;gap:8px;align-items:center">'
-    +'<input type="text" id="gwSeedQuery" placeholder="Past winner name (e.g. mutasif)" style="flex:1;padding:6px 10px;border-radius:8px;border:1px solid rgba(255,80,80,.35);background:rgba(255,50,50,.08);color:inherit;font-size:13px">'
+    +'<div class="gw-admin-field"><label>Past winner name</label><input type="text" id="gwSeedQuery" placeholder="e.g. mutasif"></div>'
+    +'<div class="gw-admin-field"><label>Giveaway title (optional)</label><input type="text" id="gwSeedTitle" placeholder="e.g. October 2026 Giveaway"></div>'
+    +'<div class="gw-admin-field"><label>Prize (optional)</label><input type="text" id="gwSeedPrize" placeholder="e.g. Battlefield 6"></div>'
     +'<button class="gw-btn-danger" onclick="gwResetAndSeed()">Reset &amp; Seed</button>'
-    +'</div>'
     +'<div id="gwMsg" style="font-size:12px;margin-top:8px;color:var(--dim)"></div></div>';
 }
 
@@ -5577,8 +5580,10 @@ async function gwRemoveEntry(id,mid,name){
 async function gwResetAndSeed(){
   const q=($('gwSeedQuery')||{}).value?.trim();
   if(!q) return;
+  const title=($('gwSeedTitle')||{}).value?.trim()||'';
+  const prize=($('gwSeedPrize')||{}).value?.trim()||'';
   if(!confirm('This will DELETE all giveaway data and rotation history, then add "'+q+'" as the only past winner. Are you sure?')) return;
-  const r=await fetch('/api/giveaway/admin/reset-and-seed',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({winner_query:q})});
+  const r=await fetch('/api/giveaway/admin/reset-and-seed',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({winner_query:q,title,prize})});
   const d=await r.json();
   if(r.ok){ gwMsg('Reset complete. Seeded: '+d.seeded_winner.display+' ✓'); _gwReload(); }
   else if(d.error==='ambiguous'){ gwMsg('Multiple matches: '+d.matches.map(m=>m.display).join(', ')+' — be more specific',false); }
